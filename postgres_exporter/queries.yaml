@@ -1,0 +1,240 @@
+# Кастомные метрики postgres_exporter. Namespace = имя ключа, имя метрики =
+# <namespace>_<column>. Метки: db_name / schema / table / index задаются через
+# столбцы-LABEL; pg_cluster добавляется скрейпером (VictoriaMetrics).
+# ВАЖНО: schema/table/index — зарезервированные слова, поэтому алиасы в кавычках.
+
+pgcol_table:
+  query: |
+    SELECT
+      current_database() AS db_name,
+      s.schemaname       AS "schema",
+      s.relname          AS "table",
+      c.relispartition::text AS is_partition,
+      s.n_live_tup, s.n_dead_tup,
+      CASE WHEN s.n_live_tup > 0
+           THEN round(100.0 * s.n_dead_tup / s.n_live_tup, 2) ELSE 0 END AS dead_ratio,
+      s.seq_scan, s.idx_scan,
+      s.n_tup_ins, s.n_tup_upd, s.n_tup_del, s.n_tup_hot_upd,
+      s.vacuum_count, s.autovacuum_count, s.analyze_count, s.autoanalyze_count,
+      COALESCE(extract(epoch FROM s.last_autovacuum), 0)  AS last_autovacuum_ts,
+      COALESCE(extract(epoch FROM s.last_vacuum), 0)      AS last_vacuum_ts,
+      COALESCE(extract(epoch FROM s.last_autoanalyze), 0) AS last_autoanalyze_ts,
+      COALESCE(extract(epoch FROM s.last_analyze), 0)     AS last_analyze_ts,
+      pg_total_relation_size(c.oid)                  AS total_bytes,
+      pg_relation_size(c.oid)                        AS heap_bytes,
+      pg_indexes_size(c.oid)                         AS index_bytes,
+      COALESCE(pg_relation_size(c.reltoastrelid), 0) AS toast_bytes
+    FROM pg_stat_user_tables s
+    JOIN pg_class c ON c.oid = s.relid
+  metrics:
+    - db_name: {usage: "LABEL"}
+    - schema: {usage: "LABEL"}
+    - table: {usage: "LABEL"}
+    - is_partition: {usage: "LABEL", description: "true, если это листовая партиция"}
+    - n_live_tup: {usage: "GAUGE", description: "Оценка числа живых строк"}
+    - n_dead_tup: {usage: "GAUGE", description: "Оценка числа мёртвых строк"}
+    - dead_ratio: {usage: "GAUGE", description: "Доля мёртвых строк, %"}
+    - seq_scan: {usage: "COUNTER", description: "Число seq scan"}
+    - idx_scan: {usage: "COUNTER", description: "Число index scan"}
+    - n_tup_ins: {usage: "COUNTER", description: "Вставлено строк"}
+    - n_tup_upd: {usage: "COUNTER", description: "Обновлено строк"}
+    - n_tup_del: {usage: "COUNTER", description: "Удалено строк"}
+    - n_tup_hot_upd: {usage: "COUNTER", description: "HOT-обновлений"}
+    - vacuum_count: {usage: "COUNTER"}
+    - autovacuum_count: {usage: "COUNTER"}
+    - analyze_count: {usage: "COUNTER"}
+    - autoanalyze_count: {usage: "COUNTER"}
+    - last_autovacuum_ts: {usage: "GAUGE", description: "Epoch последнего autovacuum (0 = никогда)"}
+    - last_vacuum_ts: {usage: "GAUGE", description: "Epoch последнего ручного VACUUM (0 = никогда)"}
+    - last_autoanalyze_ts: {usage: "GAUGE", description: "Epoch последнего autoanalyze (0 = никогда)"}
+    - last_analyze_ts: {usage: "GAUGE", description: "Epoch последнего ручного ANALYZE (0 = никогда)"}
+    - total_bytes: {usage: "GAUGE", description: "Полный размер (heap+index+toast)"}
+    - heap_bytes: {usage: "GAUGE"}
+    - index_bytes: {usage: "GAUGE"}
+    - toast_bytes: {usage: "GAUGE"}
+  cache_seconds: 30
+
+pgcol_index:
+  query: |
+    SELECT current_database() AS db_name,
+           s.schemaname   AS "schema",
+           s.relname      AS "table",
+           s.indexrelname AS "index",
+           s.idx_scan,
+           pg_relation_size(s.indexrelid) AS size_bytes
+    FROM pg_stat_user_indexes s
+  metrics:
+    - db_name: {usage: "LABEL"}
+    - schema: {usage: "LABEL"}
+    - table: {usage: "LABEL"}
+    - index: {usage: "LABEL"}
+    - idx_scan: {usage: "COUNTER", description: "Сканирований индекса"}
+    - size_bytes: {usage: "GAUGE", description: "Размер индекса"}
+  cache_seconds: 30
+
+pgcol_partition:
+  query: |
+    SELECT current_database() AS db_name,
+           pn.nspname     AS "schema",
+           parent.relname AS parent,
+           child.relname  AS "partition",
+           pg_get_expr(child.relpartbound, child.oid) AS bounds,
+           pg_total_relation_size(child.oid) AS size_bytes,
+           child.reltuples::bigint AS row_estimate
+    FROM pg_inherits i
+    JOIN pg_class child  ON child.oid  = i.inhrelid
+    JOIN pg_class parent ON parent.oid = i.inhparent
+    JOIN pg_namespace pn ON pn.oid = child.relnamespace
+    WHERE child.relispartition
+  metrics:
+    - db_name: {usage: "LABEL"}
+    - schema: {usage: "LABEL"}
+    - parent: {usage: "LABEL"}
+    - partition: {usage: "LABEL"}
+    - bounds: {usage: "LABEL"}
+    - size_bytes: {usage: "GAUGE", description: "Полный размер партиции (heap+index+toast)"}
+    - row_estimate: {usage: "GAUGE", description: "Оценка числа строк в партиции"}
+  cache_seconds: 60
+
+pgcol_db:
+  query: |
+    SELECT d.datname AS db_name,
+           pg_database_size(d.datname) AS size_bytes,
+           s.numbackends, s.xact_commit, s.xact_rollback,
+           s.blks_read, s.blks_hit, s.deadlocks,
+           s.temp_files, s.temp_bytes,
+           CASE WHEN s.blks_hit + s.blks_read > 0
+                THEN round(100.0 * s.blks_hit / (s.blks_hit + s.blks_read), 2)
+                ELSE 100 END AS cache_hit_ratio
+    FROM pg_stat_database s
+    JOIN pg_database d ON d.oid = s.datid
+    WHERE d.datname = current_database()
+  metrics:
+    - db_name: {usage: "LABEL"}
+    - size_bytes: {usage: "GAUGE", description: "Размер БД"}
+    - numbackends: {usage: "GAUGE", description: "Активные соединения"}
+    - xact_commit: {usage: "COUNTER"}
+    - xact_rollback: {usage: "COUNTER"}
+    - blks_read: {usage: "COUNTER"}
+    - blks_hit: {usage: "COUNTER"}
+    - deadlocks: {usage: "COUNTER"}
+    - temp_files: {usage: "COUNTER"}
+    - temp_bytes: {usage: "COUNTER"}
+    - cache_hit_ratio: {usage: "GAUGE", description: "Cache hit ratio, %"}
+  cache_seconds: 30
+
+pgcol_table_bloat:
+  query: |
+    SELECT current_database() AS db_name, schemaname AS "schema", tblname AS "table",
+           GREATEST((tblpages - est_tblpages_ff) * bs, 0) AS bytes,
+           CASE WHEN tblpages - est_tblpages_ff > 0
+                THEN round((100 * (tblpages - est_tblpages_ff) / tblpages::float)::numeric, 2)
+                ELSE 0 END AS ratio
+    FROM (
+      SELECT ceil( reltuples / ((bs-page_hdr)*fillfactor/(tpl_size*100)) )
+                 + ceil( toasttuples / 4 ) AS est_tblpages_ff,
+             tblpages, bs, schemaname, tblname
+      FROM (
+        SELECT
+          ( 4 + tpl_hdr_size + tpl_data_size + (2*ma)
+            - CASE WHEN tpl_hdr_size%ma = 0 THEN ma ELSE tpl_hdr_size%ma END
+            - CASE WHEN ceil(tpl_data_size)::int%ma = 0 THEN ma
+                   ELSE ceil(tpl_data_size)::int%ma END
+          ) AS tpl_size,
+          (heappages + toastpages) AS tblpages, reltuples, toasttuples,
+          bs, page_hdr, schemaname, tblname, fillfactor
+        FROM (
+          SELECT
+            ns.nspname AS schemaname, tbl.relname AS tblname,
+            tbl.reltuples, tbl.relpages AS heappages,
+            coalesce(toast.relpages, 0) AS toastpages,
+            coalesce(toast.reltuples, 0) AS toasttuples,
+            coalesce(substring(array_to_string(tbl.reloptions, ' ')
+                     FROM 'fillfactor=([0-9]+)')::smallint, 100) AS fillfactor,
+            current_setting('block_size')::numeric AS bs,
+            CASE WHEN version() ~ '64-bit|x86_64|ppc64|ia64|amd64' THEN 8 ELSE 4 END AS ma,
+            24 AS page_hdr,
+            23 + CASE WHEN MAX(coalesce(s.null_frac,0)) > 0
+                      THEN ( 7 + count(s.attname) ) / 8 ELSE 0::int END AS tpl_hdr_size,
+            sum( (1-coalesce(s.null_frac, 0)) * coalesce(s.avg_width, 0) ) AS tpl_data_size
+          FROM pg_attribute AS att
+          JOIN pg_class AS tbl ON att.attrelid = tbl.oid
+          JOIN pg_namespace AS ns ON ns.oid = tbl.relnamespace
+          LEFT JOIN pg_stats AS s
+                 ON s.schemaname = ns.nspname AND s.tablename = tbl.relname
+                AND s.inherited = false AND s.attname = att.attname
+          LEFT JOIN pg_class AS toast ON tbl.reltoastrelid = toast.oid
+          WHERE NOT att.attisdropped AND tbl.relkind IN ('r','m') AND att.attnum > 0
+            AND ns.nspname NOT IN ('pg_catalog','information_schema')
+          GROUP BY tbl.oid, ns.nspname, tbl.relname, tbl.reltuples, tbl.relpages,
+                   toast.relpages, toast.reltuples, tbl.reloptions, tbl.reltoastrelid
+        ) AS s1
+      ) AS s2
+    ) AS s3
+  metrics:
+    - db_name: {usage: "LABEL"}
+    - schema: {usage: "LABEL"}
+    - table: {usage: "LABEL"}
+    - bytes: {usage: "GAUGE", description: "Оценка распухания, байт"}
+    - ratio: {usage: "GAUGE", description: "Оценка распухания, %"}
+  cache_seconds: 300
+
+pgcol_statement:
+  query: |
+    SELECT s.queryid::text AS queryid,
+           current_database() AS db_name,
+           pg_get_userbyid(s.userid) AS "user",
+           left(regexp_replace(s.query, '\s+', ' ', 'g'), 120) AS query,
+           s.calls,
+           s.total_exec_time AS total_time_ms,
+           s.mean_exec_time  AS mean_time_ms,
+           s.rows,
+           (s.shared_blks_hit + s.shared_blks_read) * current_setting('block_size')::bigint AS mem_bytes,
+           GREATEST(s.total_exec_time - s.blk_read_time - s.blk_write_time, 0) AS cpu_time_ms,
+           (s.temp_blks_read + s.temp_blks_written) * current_setting('block_size')::bigint AS temp_bytes
+    FROM pg_stat_statements s
+    WHERE s.dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+      AND s.query !~* '^\s*(begin|commit|end|set|show|deallocate|reset|vacuum|analyze)'
+    ORDER BY s.total_exec_time DESC
+    LIMIT 50
+  metrics:
+    - queryid: {usage: "LABEL"}
+    - db_name: {usage: "LABEL"}
+    - user: {usage: "LABEL"}
+    - query: {usage: "LABEL"}
+    - calls: {usage: "GAUGE", description: "Число вызовов (накопительно)"}
+    - total_time_ms: {usage: "GAUGE", description: "Суммарное время выполнения, мс"}
+    - mean_time_ms: {usage: "GAUGE", description: "Среднее время выполнения, мс"}
+    - rows: {usage: "GAUGE", description: "Обработано строк (накопительно)"}
+    - mem_bytes: {usage: "GAUGE", description: "Обращения к shared-буферам (ОЗУ), байт"}
+    - cpu_time_ms: {usage: "GAUGE", description: "CPU-время = exec - IO, мс"}
+    - temp_bytes: {usage: "GAUGE", description: "Данные в temp (spill), байт"}
+  cache_seconds: 60
+
+pgcol_index_frag:
+  query: |
+    SELECT current_database() AS db_name,
+           n.nspname AS "schema",
+           t.relname AS "table",
+           i.relname AS "index",
+           GREATEST(100 - st.avg_leaf_density, 0)::float AS bloat_ratio,
+           st.leaf_fragmentation::float AS fragmentation
+    FROM pg_index x
+    JOIN pg_class i ON i.oid = x.indexrelid
+    JOIN pg_class t ON t.oid = x.indrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    JOIN pg_am am ON am.oid = i.relam
+    CROSS JOIN LATERAL pgstatindex(i.oid::regclass) st
+    WHERE am.amname = 'btree'
+      AND i.relpages > 1
+      AND n.nspname NOT IN ('pg_catalog','information_schema')
+      AND n.nspname NOT LIKE 'pg_%'
+      AND pg_relation_size(i.oid) < 536870912
+  metrics:
+    - db_name: {usage: "LABEL"}
+    - schema: {usage: "LABEL"}
+    - table: {usage: "LABEL"}
+    - index: {usage: "LABEL"}
+    - bloat_ratio: {usage: "GAUGE", description: "Распухание индекса = 100 - плотность листьев, %"}
+    - fragmentation: {usage: "GAUGE", description: "Фрагментация листьев индекса, %"}
+  cache_seconds: 600
