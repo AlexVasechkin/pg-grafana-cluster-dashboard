@@ -158,8 +158,8 @@ pgcls_wal:
     - syncs: {usage: "COUNTER"}
     - write_time_ms: {usage: "COUNTER", description: "Нужен track_io_timing=on"}
     - sync_time_ms: {usage: "COUNTER", description: "Нужен track_io_timing=on"}
-    - dir_bytes: {usage: "GAUGE", description: "Фактический объём pg_wal (pg_ls_waldir)"}
-    - dir_files: {usage: "GAUGE"}
+    - dir_bytes: {usage: "GAUGE", description: "Фактический объём pg_wal (pg_ls_waldir) [M43 pg.wal.dir_bytes]"}
+    - dir_files: {usage: "GAUGE", description: "Сегментов в pg_wal [M43 pg.wal.dir_bytes]"}
   cache_seconds: 15
 
 pgcls_ckpt:

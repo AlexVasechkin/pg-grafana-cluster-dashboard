@@ -97,7 +97,7 @@
     {
       "type": "row",
       "id": 1,
-      "title": "0. Сводка — нагрузка кластера $pg_cluster  ·  M24, M26, M28, M42",
+      "title": "0. Сводка — нагрузка кластера $pg_cluster  ·  M09, M10, M17, M24, M26, M28, M42, M43",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -204,7 +204,7 @@
       "description": "count(*) из pg_stat_activity **узла $node** — соединения живут на узле, а не в кластере: у лидера это нагрузка приложений, у реплики — читатели и walreceiver. Первая группа серий — соединения приложений (`backend_type='client backend'`) в разрезе БД · состояние: именно они занимают слоты `max_connections`, а растущий `idle in transaction` держит xmin и создаёт блокировки. Вторая — служебные процессы этого узла (walsender, walreceiver, autovacuum worker, checkpointer): у них нет ни БД, ни состояния, а walsender'ы расходуют `max_wal_senders`, а не `max_connections`. Узел переключается фильтром «Узел» сверху или кликом по строке в таблице «Узлы кластера» (секция 1). Процент насыщения слотов по всем узлам сразу — панель «Соединения, % от max_connections» в секции 6.",
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
         "y": 10
       },
@@ -272,8 +272,8 @@
       "description": "pg_locks: count(*) с группировкой по mode. Серии «ждут» (granted=false) — это разрез панели слева: видно, какой именно режим стоит в очереди. Серии «держат» (granted=true) — нормальный фон работы; всплеск AccessExclusiveLock на нём = DDL или VACUUM FULL, который сейчас блокирует всех остальных.",
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 8,
         "y": 10
       },
       "targets": [
@@ -330,27 +330,240 @@
       }
     },
     {
-      "type": "row",
+      "type": "timeseries",
       "id": 5,
+      "title": "[M17] Checkpoints: timed vs requested ($node)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "description": "Тот же график, что в секции 7, для узла $node: частота checkpoint'ов по расписанию (`checkpoint_timeout`) и по требованию (`max_wal_size` исчерпан). В сводке он объясняет пилы latency рядом с TPS: всплеск «по требованию» = WAL генерится быстрее, чем рассчитан `max_wal_size`, и чекпоинтер начинает штормить диск. Доля req в процентах и время write/sync — в секции 7.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "rate(pgcls_ckpt_timed{pg_cluster=\"$pg_cluster\", node=\"$node\"}[$__rate_interval])",
+          "refId": "A",
+          "legendFormat": "по расписанию"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "rate(pgcls_ckpt_req{pg_cluster=\"$pg_cluster\", node=\"$node\"}[$__rate_interval])",
+          "refId": "B",
+          "legendFormat": "по требованию"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 6,
+      "title": "[M43] Размер pg_wal по узлам",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "description": "Фактический объём `pg_wal` каждого узла (`pg_ls_waldir()`), тот же график, что в секции 4. В сводке он стоит последним как индикатор «ещё не авария, но копится»: рост выше `max_wal_size` + `wal_keep_size` означает, что WAL кто-то держит — неактивный слот (панель слотов, секция 4), залипший архиватор (M12/M13) или забытый prepared-xact. Свободное место под разделом `pg_wal` PostgreSQL по SQL не знает — это M37 и node_exporter (§6).",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "pgcls_wal_dir_bytes{pg_cluster=\"$pg_cluster\"}",
+          "refId": "A",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 7,
+      "title": "[M09 M10] Слоты репликации: удержанный WAL ($node)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "description": "Пара к панели слева: сколько WAL держит каждый слот **узла $node** (`pg_wal_lsn_diff` от текущего LSN узла до `restart_lsn`). Четыре группы серий — **физические** слоты (реплики, pg_basebackup) и **логические** (подписки, CDC), каждая разделена по `pgcls_slot_active`:\n\n• **НЕАКТИВЕН** — слот есть, но его никто не читает: он копит WAL до переполнения раздела, это самая частая причина «кончился диск под WAL»;\n• логические слоты опаснее физических — они держат ещё и `catalog_xmin`, то есть тормозят vacuum каталога на всём узле (метка `database`/`plugin` в легенде).\n\nПустая группа означает, что слотов такого типа на узле нет (на этом стенде логических нет вовсе). Слоты **не реплицируются**, поэтому узел важен: чтобы увидеть забытые слоты сразу на всех узлах, рядом есть кластерная копия этой панели и таблица слотов в секции 4.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "pgcls_slot_retained_bytes{pg_cluster=\"$pg_cluster\", node=\"$node\", slot_type=\"physical\"} and on(pg_cluster, node, slot_name) (pgcls_slot_active == 1)",
+          "refId": "A",
+          "legendFormat": "физический, активен: {{slot_name}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "pgcls_slot_retained_bytes{pg_cluster=\"$pg_cluster\", node=\"$node\", slot_type=\"physical\"} and on(pg_cluster, node, slot_name) (pgcls_slot_active == 0)",
+          "refId": "B",
+          "legendFormat": "физический, НЕАКТИВЕН: {{slot_name}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "pgcls_slot_retained_bytes{pg_cluster=\"$pg_cluster\", node=\"$node\", slot_type=\"logical\"} and on(pg_cluster, node, slot_name) (pgcls_slot_active == 1)",
+          "refId": "C",
+          "legendFormat": "логический, активен: {{slot_name}} ({{database}}/{{plugin}})"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "pgcls_slot_retained_bytes{pg_cluster=\"$pg_cluster\", node=\"$node\", slot_type=\"logical\"} and on(pg_cluster, node, slot_name) (pgcls_slot_active == 0)",
+          "refId": "D",
+          "legendFormat": "логический, НЕАКТИВЕН: {{slot_name}} ({{database}}/{{plugin}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "id": 8,
       "title": "1. Обзор: парк и кластер $pg_cluster  (уровень К)  ·  M01, M02, M03, M04, M07, M08, M09, M19, M24",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 25
       },
       "panels": []
     },
     {
       "type": "text",
-      "id": 6,
+      "id": 9,
       "title": "Как читать дашборд",
       "gridPos": {
         "h": 7,
         "w": 6,
         "x": 0,
-        "y": 19
+        "y": 26
       },
       "options": {
         "mode": "markdown",
@@ -359,7 +572,7 @@
     },
     {
       "type": "table",
-      "id": 7,
+      "id": 10,
       "title": "[M01 M07 M09 M19] Парк: все кластеры (фильтр $pg_cluster не применяется)",
       "datasource": {
         "type": "prometheus",
@@ -370,7 +583,7 @@
         "h": 7,
         "w": 9,
         "x": 6,
-        "y": 19
+        "y": 26
       },
       "targets": [
         {
@@ -594,7 +807,7 @@
     },
     {
       "type": "table",
-      "id": 8,
+      "id": 11,
       "title": "[M01 M02 M07 M08 M24] Узлы кластера $pg_cluster",
       "datasource": {
         "type": "prometheus",
@@ -605,7 +818,7 @@
         "h": 7,
         "w": 9,
         "x": 15,
-        "y": 19
+        "y": 26
       },
       "targets": [
         {
@@ -880,7 +1093,7 @@
     },
     {
       "type": "stat",
-      "id": 9,
+      "id": 12,
       "title": "[M01] Лидеров (SQL)",
       "datasource": {
         "type": "prometheus",
@@ -891,7 +1104,7 @@
         "h": 4,
         "w": 3,
         "x": 0,
-        "y": 26
+        "y": 33
       },
       "targets": [
         {
@@ -944,7 +1157,7 @@
     },
     {
       "type": "stat",
-      "id": 10,
+      "id": 13,
       "title": "[M04] Лидеров (Patroni)",
       "datasource": {
         "type": "prometheus",
@@ -955,7 +1168,7 @@
         "h": 4,
         "w": 3,
         "x": 3,
-        "y": 26
+        "y": 33
       },
       "targets": [
         {
@@ -1008,7 +1221,7 @@
     },
     {
       "type": "stat",
-      "id": 11,
+      "id": 14,
       "title": "[M04] Узлов онлайн",
       "datasource": {
         "type": "prometheus",
@@ -1019,7 +1232,7 @@
         "h": 4,
         "w": 3,
         "x": 6,
-        "y": 26
+        "y": 33
       },
       "targets": [
         {
@@ -1068,7 +1281,7 @@
     },
     {
       "type": "stat",
-      "id": 12,
+      "id": 15,
       "title": "[M08] Реплик у лидера",
       "datasource": {
         "type": "prometheus",
@@ -1079,7 +1292,7 @@
         "h": 4,
         "w": 3,
         "x": 9,
-        "y": 26
+        "y": 33
       },
       "targets": [
         {
@@ -1132,7 +1345,7 @@
     },
     {
       "type": "stat",
-      "id": 13,
+      "id": 16,
       "title": "[M07] Макс. lag реплики",
       "datasource": {
         "type": "prometheus",
@@ -1143,7 +1356,7 @@
         "h": 4,
         "w": 3,
         "x": 12,
-        "y": 26
+        "y": 33
       },
       "targets": [
         {
@@ -1196,7 +1409,7 @@
     },
     {
       "type": "stat",
-      "id": 14,
+      "id": 17,
       "title": "[M19] Макс. xid, %",
       "datasource": {
         "type": "prometheus",
@@ -1207,7 +1420,7 @@
         "h": 4,
         "w": 3,
         "x": 15,
-        "y": 26
+        "y": 33
       },
       "targets": [
         {
@@ -1260,7 +1473,7 @@
     },
     {
       "type": "stat",
-      "id": 15,
+      "id": 18,
       "title": "[M03] etcd: кворум/лидер",
       "datasource": {
         "type": "prometheus",
@@ -1271,7 +1484,7 @@
         "h": 4,
         "w": 3,
         "x": 18,
-        "y": 26
+        "y": 33
       },
       "targets": [
         {
@@ -1336,7 +1549,7 @@
     },
     {
       "type": "stat",
-      "id": 16,
+      "id": 19,
       "title": "[M09] Слотов неактивных",
       "datasource": {
         "type": "prometheus",
@@ -1347,7 +1560,7 @@
         "h": 4,
         "w": 3,
         "x": 21,
-        "y": 26
+        "y": 33
       },
       "targets": [
         {
@@ -1396,20 +1609,20 @@
     },
     {
       "type": "row",
-      "id": 17,
+      "id": 20,
       "title": "2. Patroni и DCS — чего SQL не знает (§6 CLUSTER-METRICS.md)  ·  M02, M03, M04, M08",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 30
+        "y": 37
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 18,
+      "id": 21,
       "title": "[M04] Роль по версии Patroni",
       "datasource": {
         "type": "prometheus",
@@ -1420,7 +1633,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 31
+        "y": 38
       },
       "targets": [
         {
@@ -1493,7 +1706,7 @@
     },
     {
       "type": "timeseries",
-      "id": 19,
+      "id": 22,
       "title": "[M02] Timeline узлов (сдвиг = был failover)",
       "datasource": {
         "type": "prometheus",
@@ -1504,7 +1717,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 31
+        "y": 38
       },
       "targets": [
         {
@@ -1549,7 +1762,7 @@
     },
     {
       "type": "timeseries",
-      "id": 20,
+      "id": 23,
       "title": "[M03] Возраст связи с DCS и смены лидера etcd",
       "datasource": {
         "type": "prometheus",
@@ -1560,7 +1773,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 31
+        "y": 38
       },
       "targets": [
         {
@@ -1614,7 +1827,7 @@
     },
     {
       "type": "stat",
-      "id": 21,
+      "id": 24,
       "title": "[M02] Переключений TL за окно",
       "datasource": {
         "type": "prometheus",
@@ -1625,7 +1838,7 @@
         "h": 4,
         "w": 3,
         "x": 0,
-        "y": 38
+        "y": 45
       },
       "targets": [
         {
@@ -1674,7 +1887,7 @@
     },
     {
       "type": "stat",
-      "id": 22,
+      "id": 25,
       "title": "[M04] Patroni paused",
       "datasource": {
         "type": "prometheus",
@@ -1685,7 +1898,7 @@
         "h": 4,
         "w": 3,
         "x": 3,
-        "y": 38
+        "y": 45
       },
       "targets": [
         {
@@ -1750,7 +1963,7 @@
     },
     {
       "type": "stat",
-      "id": 23,
+      "id": 26,
       "title": "[M04] Кластер без лока (unlocked)",
       "datasource": {
         "type": "prometheus",
@@ -1761,7 +1974,7 @@
         "h": 4,
         "w": 3,
         "x": 6,
-        "y": 38
+        "y": 45
       },
       "targets": [
         {
@@ -1826,7 +2039,7 @@
     },
     {
       "type": "stat",
-      "id": 24,
+      "id": 27,
       "title": "[доп] pending_restart узлов",
       "datasource": {
         "type": "prometheus",
@@ -1837,7 +2050,7 @@
         "h": 4,
         "w": 3,
         "x": 9,
-        "y": 38
+        "y": 45
       },
       "targets": [
         {
@@ -1886,7 +2099,7 @@
     },
     {
       "type": "stat",
-      "id": 25,
+      "id": 28,
       "title": "[M03] etcd-узлов онлайн",
       "datasource": {
         "type": "prometheus",
@@ -1897,7 +2110,7 @@
         "h": 4,
         "w": 3,
         "x": 12,
-        "y": 38
+        "y": 45
       },
       "targets": [
         {
@@ -1950,7 +2163,7 @@
     },
     {
       "type": "stat",
-      "id": 26,
+      "id": 29,
       "title": "[M04] Patroni: PG запущен",
       "datasource": {
         "type": "prometheus",
@@ -1961,7 +2174,7 @@
         "h": 4,
         "w": 3,
         "x": 15,
-        "y": 38
+        "y": 45
       },
       "targets": [
         {
@@ -2010,7 +2223,7 @@
     },
     {
       "type": "stat",
-      "id": 27,
+      "id": 30,
       "title": "[M08] Реплик в streaming",
       "datasource": {
         "type": "prometheus",
@@ -2021,7 +2234,7 @@
         "h": 4,
         "w": 3,
         "x": 18,
-        "y": 38
+        "y": 45
       },
       "targets": [
         {
@@ -2070,7 +2283,7 @@
     },
     {
       "type": "stat",
-      "id": 28,
+      "id": 31,
       "title": "[доп] Накат приостановлен",
       "datasource": {
         "type": "prometheus",
@@ -2081,7 +2294,7 @@
         "h": 4,
         "w": 3,
         "x": 21,
-        "y": 38
+        "y": 45
       },
       "targets": [
         {
@@ -2146,20 +2359,20 @@
     },
     {
       "type": "row",
-      "id": 29,
+      "id": 32,
       "title": "3. Репликация — кластер $pg_cluster (без $node: сравниваем узлы)  ·  M05, M06, M07, M08",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 49
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 30,
+      "id": 33,
       "title": "[M07] Отставание наката, байт",
       "datasource": {
         "type": "prometheus",
@@ -2170,7 +2383,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 43
+        "y": 50
       },
       "targets": [
         {
@@ -2215,7 +2428,7 @@
     },
     {
       "type": "timeseries",
-      "id": 31,
+      "id": 34,
       "title": "[M07] Отставание наката, сек",
       "datasource": {
         "type": "prometheus",
@@ -2226,7 +2439,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 43
+        "y": 50
       },
       "targets": [
         {
@@ -2271,7 +2484,7 @@
     },
     {
       "type": "timeseries",
-      "id": 32,
+      "id": 35,
       "title": "[M06] Удержанный лаг sync-реплики, сек",
       "datasource": {
         "type": "prometheus",
@@ -2282,7 +2495,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 43
+        "y": 50
       },
       "targets": [
         {
@@ -2336,7 +2549,7 @@
     },
     {
       "type": "table",
-      "id": 33,
+      "id": 36,
       "title": "[M06 M07 M08] Получатели WAL (все узлы кластера)",
       "datasource": {
         "type": "prometheus",
@@ -2347,7 +2560,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 50
+        "y": 57
       },
       "targets": [
         {
@@ -2605,7 +2818,7 @@
     },
     {
       "type": "timeseries",
-      "id": 34,
+      "id": 37,
       "title": "[M05 M08] Получателей WAL: всего и sync",
       "datasource": {
         "type": "prometheus",
@@ -2616,7 +2829,7 @@
         "h": 7,
         "w": 6,
         "x": 12,
-        "y": 50
+        "y": 57
       },
       "targets": [
         {
@@ -2670,7 +2883,7 @@
     },
     {
       "type": "timeseries",
-      "id": 35,
+      "id": 38,
       "title": "[доп] Реплика: получено, но не применено",
       "datasource": {
         "type": "prometheus",
@@ -2681,7 +2894,7 @@
         "h": 7,
         "w": 6,
         "x": 18,
-        "y": 50
+        "y": 57
       },
       "targets": [
         {
@@ -2735,20 +2948,20 @@
     },
     {
       "type": "row",
-      "id": 36,
-      "title": "4. Слоты и WAL — все узлы (слоты не реплицируются, §D)  ·  M09, M10, M12, M13, M16",
+      "id": 39,
+      "title": "4. Слоты и WAL — все узлы (слоты не реплицируются, §D)  ·  M09, M10, M12, M13, M16, M43",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 57
+        "y": 64
       },
       "panels": []
     },
     {
       "type": "table",
-      "id": 37,
+      "id": 40,
       "title": "[M09 M10] Слоты репликации по всем узлам",
       "datasource": {
         "type": "prometheus",
@@ -2759,7 +2972,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 58
+        "y": 65
       },
       "targets": [
         {
@@ -3009,8 +3222,8 @@
     },
     {
       "type": "timeseries",
-      "id": 38,
-      "title": "[доп] Размер pg_wal по узлам",
+      "id": 41,
+      "title": "[M43] Размер pg_wal по узлам",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
@@ -3020,7 +3233,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 58
+        "y": 65
       },
       "targets": [
         {
@@ -3065,7 +3278,7 @@
     },
     {
       "type": "timeseries",
-      "id": 39,
+      "id": 42,
       "title": "[M16] Скорость генерации WAL",
       "datasource": {
         "type": "prometheus",
@@ -3076,7 +3289,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 58
+        "y": 65
       },
       "targets": [
         {
@@ -3121,7 +3334,7 @@
     },
     {
       "type": "timeseries",
-      "id": 40,
+      "id": 43,
       "title": "[M12 M13] Архиватор: ошибки/с и очередь .ready",
       "datasource": {
         "type": "prometheus",
@@ -3132,7 +3345,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 66
+        "y": 73
       },
       "targets": [
         {
@@ -3186,7 +3399,7 @@
     },
     {
       "type": "timeseries",
-      "id": 41,
+      "id": 44,
       "title": "[M12] Возраст последней архивации",
       "datasource": {
         "type": "prometheus",
@@ -3197,7 +3410,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 66
+        "y": 73
       },
       "targets": [
         {
@@ -3242,18 +3455,18 @@
     },
     {
       "type": "timeseries",
-      "id": 42,
-      "title": "[M09 M10] Удержано WAL слотами",
+      "id": 45,
+      "title": "[M09 M10] Слоты репликации: удержанный WAL",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
       },
-      "description": "pg.repl.slot_retained / pg.repl.log_slot_retained",
+      "description": "pg.repl.slot_retained / pg.repl.log_slot_retained. Слоты разделены по active: неактивный слот копит WAL и никто его не читает",
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 66
+        "y": 73
       },
       "targets": [
         {
@@ -3261,9 +3474,27 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "pgcls_slot_retained_bytes{pg_cluster=\"$pg_cluster\"}",
+          "expr": "pgcls_slot_retained_bytes{pg_cluster=\"$pg_cluster\"} and on(pg_cluster, node, slot_name) (pgcls_slot_active == 1)",
           "refId": "A",
-          "legendFormat": "{{node}}/{{slot_name}}"
+          "legendFormat": "активен: {{node}}/{{slot_name}} ({{slot_type}})"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "pgcls_slot_retained_bytes{pg_cluster=\"$pg_cluster\"} and on(pg_cluster, node, slot_name) (pgcls_slot_active == 0)",
+          "refId": "B",
+          "legendFormat": "НЕАКТИВЕН: {{node}}/{{slot_name}} ({{slot_type}})"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "min by (node, slot_name) (pgcls_slot_safe_wal_size_bytes{pg_cluster=\"$pg_cluster\"} > 0)",
+          "refId": "C",
+          "legendFormat": "запас до lost: {{node}}/{{slot_name}}"
         }
       ],
       "fieldConfig": {
@@ -3298,20 +3529,20 @@
     },
     {
       "type": "row",
-      "id": 43,
+      "id": 46,
       "title": "5. Предаварийное — wraparound, горизонт, блокировки  ·  M19, M20, M23, M25, M26, M38",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 73
+        "y": 80
       },
       "panels": []
     },
     {
       "type": "bargauge",
-      "id": 44,
+      "id": 47,
       "title": "[M19] xid, % от freeze_max_age (по БД)",
       "datasource": {
         "type": "prometheus",
@@ -3322,7 +3553,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 74
+        "y": 81
       },
       "targets": [
         {
@@ -3375,7 +3606,7 @@
     },
     {
       "type": "timeseries",
-      "id": 45,
+      "id": 48,
       "title": "[M23] Горизонт xmin: кто держит",
       "datasource": {
         "type": "prometheus",
@@ -3386,7 +3617,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 74
+        "y": 81
       },
       "targets": [
         {
@@ -3449,7 +3680,7 @@
     },
     {
       "type": "timeseries",
-      "id": 46,
+      "id": 49,
       "title": "[M25] Самая долгая idle in transaction",
       "datasource": {
         "type": "prometheus",
@@ -3460,7 +3691,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 74
+        "y": 81
       },
       "targets": [
         {
@@ -3514,7 +3745,7 @@
     },
     {
       "type": "timeseries",
-      "id": 47,
+      "id": 50,
       "title": "[M26] Блокировки без granted",
       "datasource": {
         "type": "prometheus",
@@ -3525,7 +3756,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 81
+        "y": 88
       },
       "targets": [
         {
@@ -3570,7 +3801,7 @@
     },
     {
       "type": "timeseries",
-      "id": 48,
+      "id": 51,
       "title": "[M38] checksum failures /с",
       "datasource": {
         "type": "prometheus",
@@ -3581,7 +3812,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 81
+        "y": 88
       },
       "targets": [
         {
@@ -3626,7 +3857,7 @@
     },
     {
       "type": "timeseries",
-      "id": 49,
+      "id": 52,
       "title": "[M20 M23] Аварийный автовакуум и 2PC",
       "datasource": {
         "type": "prometheus",
@@ -3637,7 +3868,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 81
+        "y": 88
       },
       "targets": [
         {
@@ -3691,20 +3922,20 @@
     },
     {
       "type": "row",
-      "id": 50,
+      "id": 53,
       "title": "6. Нагрузка — счётчики с лидера (Б~ + and on(...) is_primary == 1)  ·  M21, M24, M28, M29",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 88
+        "y": 95
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 51,
+      "id": 54,
       "title": "[M28] TPS с лидера",
       "datasource": {
         "type": "prometheus",
@@ -3715,7 +3946,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 89
+        "y": 96
       },
       "targets": [
         {
@@ -3769,7 +4000,7 @@
     },
     {
       "type": "timeseries",
-      "id": 52,
+      "id": 55,
       "title": "[M28] Rollback ratio, %",
       "datasource": {
         "type": "prometheus",
@@ -3780,7 +4011,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 89
+        "y": 96
       },
       "targets": [
         {
@@ -3825,7 +4056,7 @@
     },
     {
       "type": "timeseries",
-      "id": 53,
+      "id": 56,
       "title": "[доп] Cache hit ratio (все узлы)",
       "datasource": {
         "type": "prometheus",
@@ -3836,7 +4067,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 89
+        "y": 96
       },
       "targets": [
         {
@@ -3882,7 +4113,7 @@
     },
     {
       "type": "timeseries",
-      "id": 54,
+      "id": 57,
       "title": "[M24] Соединения, % от max_connections",
       "datasource": {
         "type": "prometheus",
@@ -3893,7 +4124,7 @@
         "h": 7,
         "w": 6,
         "x": 0,
-        "y": 96
+        "y": 103
       },
       "targets": [
         {
@@ -3938,7 +4169,7 @@
     },
     {
       "type": "timeseries",
-      "id": 55,
+      "id": 58,
       "title": "[M29] Долгие запросы",
       "datasource": {
         "type": "prometheus",
@@ -3949,7 +4180,7 @@
         "h": 7,
         "w": 6,
         "x": 6,
-        "y": 96
+        "y": 103
       },
       "targets": [
         {
@@ -4012,7 +4243,7 @@
     },
     {
       "type": "timeseries",
-      "id": 56,
+      "id": 59,
       "title": "[M21] Temp spill (мал work_mem)",
       "datasource": {
         "type": "prometheus",
@@ -4023,7 +4254,7 @@
         "h": 7,
         "w": 6,
         "x": 12,
-        "y": 96
+        "y": 103
       },
       "targets": [
         {
@@ -4068,7 +4299,7 @@
     },
     {
       "type": "timeseries",
-      "id": 57,
+      "id": 60,
       "title": "[доп] Deadlocks и конфликты recovery /с",
       "datasource": {
         "type": "prometheus",
@@ -4079,7 +4310,7 @@
         "h": 7,
         "w": 6,
         "x": 18,
-        "y": 96
+        "y": 103
       },
       "targets": [
         {
@@ -4133,20 +4364,20 @@
     },
     {
       "type": "row",
-      "id": 58,
+      "id": 61,
       "title": "7. Checkpoint и буферы — узел $node (детализация)  ·  M17, M18, M39",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 103
+        "y": 110
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 59,
+      "id": 62,
       "title": "[M17] Checkpoints: timed vs requested ($node)",
       "datasource": {
         "type": "prometheus",
@@ -4157,7 +4388,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 104
+        "y": 111
       },
       "targets": [
         {
@@ -4211,7 +4442,7 @@
     },
     {
       "type": "timeseries",
-      "id": 60,
+      "id": 63,
       "title": "[M17] Доля requested, % ($node)",
       "datasource": {
         "type": "prometheus",
@@ -4222,7 +4453,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 104
+        "y": 111
       },
       "targets": [
         {
@@ -4268,7 +4499,7 @@
     },
     {
       "type": "timeseries",
-      "id": 61,
+      "id": 64,
       "title": "[M18] Буферы и backend fsync ($node)",
       "datasource": {
         "type": "prometheus",
@@ -4279,7 +4510,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 104
+        "y": 111
       },
       "targets": [
         {
@@ -4351,7 +4582,7 @@
     },
     {
       "type": "timeseries",
-      "id": 62,
+      "id": 65,
       "title": "[M39] WAL: write/sync time ($node)",
       "datasource": {
         "type": "prometheus",
@@ -4362,7 +4593,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 111
+        "y": 118
       },
       "targets": [
         {
@@ -4416,7 +4647,7 @@
     },
     {
       "type": "timeseries",
-      "id": 63,
+      "id": 66,
       "title": "[доп] WAL: records, fpi, buffers_full ($node)",
       "datasource": {
         "type": "prometheus",
@@ -4427,7 +4658,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 111
+        "y": 118
       },
       "targets": [
         {
@@ -4490,7 +4721,7 @@
     },
     {
       "type": "timeseries",
-      "id": 64,
+      "id": 67,
       "title": "[M39] Блочный IO по БД ($node, суррогат disk latency)",
       "datasource": {
         "type": "prometheus",
@@ -4501,7 +4732,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 111
+        "y": 118
       },
       "targets": [
         {
@@ -4555,20 +4786,20 @@
     },
     {
       "type": "row",
-      "id": 65,
+      "id": 68,
       "title": "8. Конфигурация — расхождения между узлами (без $node)  ·  M22",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 118
+        "y": 125
       },
       "panels": []
     },
     {
       "type": "table",
-      "id": 66,
+      "id": 69,
       "title": "[M22] GUC по узлам кластера",
       "datasource": {
         "type": "prometheus",
@@ -4579,7 +4810,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 119
+        "y": 126
       },
       "targets": [
         {
@@ -4654,7 +4885,7 @@
     },
     {
       "type": "table",
-      "id": 67,
+      "id": 70,
       "title": "[доп] Параметры с расхождениями",
       "datasource": {
         "type": "prometheus",
@@ -4665,7 +4896,7 @@
         "h": 9,
         "w": 6,
         "x": 12,
-        "y": 119
+        "y": 126
       },
       "targets": [
         {
@@ -4769,7 +5000,7 @@
     },
     {
       "type": "timeseries",
-      "id": 68,
+      "id": 71,
       "title": "[доп] pending_restart и возраст reload",
       "datasource": {
         "type": "prometheus",
@@ -4780,7 +5011,7 @@
         "h": 9,
         "w": 6,
         "x": 18,
-        "y": 119
+        "y": 126
       },
       "targets": [
         {
@@ -4834,20 +5065,20 @@
     },
     {
       "type": "row",
-      "id": 69,
+      "id": 72,
       "title": "9. Длительные операции — узел $node  ·  M20, M22",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 128
+        "y": 135
       },
       "panels": []
     },
     {
       "type": "table",
-      "id": 70,
+      "id": 73,
       "title": "[M20] Прогресс vacuum ($node)",
       "datasource": {
         "type": "prometheus",
@@ -4858,7 +5089,7 @@
         "h": 7,
         "w": 9,
         "x": 0,
-        "y": 129
+        "y": 136
       },
       "targets": [
         {
@@ -4980,7 +5211,7 @@
     },
     {
       "type": "table",
-      "id": 71,
+      "id": 74,
       "title": "[доп] Прогресс basebackup ($node)",
       "datasource": {
         "type": "prometheus",
@@ -4991,7 +5222,7 @@
         "h": 7,
         "w": 7,
         "x": 9,
-        "y": 129
+        "y": 136
       },
       "targets": [
         {
@@ -5101,7 +5332,7 @@
     },
     {
       "type": "timeseries",
-      "id": 72,
+      "id": 75,
       "title": "[M22] Автовакуум-воркеры vs лимит ($node)",
       "datasource": {
         "type": "prometheus",
@@ -5112,7 +5343,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 129
+        "y": 136
       },
       "targets": [
         {
@@ -5166,20 +5397,20 @@
     },
     {
       "type": "row",
-      "id": 73,
+      "id": 76,
       "title": "10. Размеры и рост (Б=, max by)  ·  M19, M40",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 136
+        "y": 143
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 74,
+      "id": 77,
       "title": "[M40] Размер БД",
       "datasource": {
         "type": "prometheus",
@@ -5190,7 +5421,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 137
+        "y": 144
       },
       "targets": [
         {
@@ -5235,7 +5466,7 @@
     },
     {
       "type": "timeseries",
-      "id": 75,
+      "id": 78,
       "title": "[M40] Размер кластера (сумма БД)",
       "datasource": {
         "type": "prometheus",
@@ -5246,7 +5477,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 137
+        "y": 144
       },
       "targets": [
         {
@@ -5300,7 +5531,7 @@
     },
     {
       "type": "timeseries",
-      "id": 76,
+      "id": 79,
       "title": "[M40] Прогноз роста (predict_linear, 30 дней)",
       "datasource": {
         "type": "prometheus",
@@ -5311,7 +5542,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 137
+        "y": 144
       },
       "targets": [
         {
@@ -5356,7 +5587,7 @@
     },
     {
       "type": "table",
-      "id": 77,
+      "id": 80,
       "title": "[M40] Tablespaces по узлам",
       "datasource": {
         "type": "prometheus",
@@ -5367,7 +5598,7 @@
         "h": 6,
         "w": 8,
         "x": 0,
-        "y": 144
+        "y": 151
       },
       "targets": [
         {
@@ -5454,7 +5685,7 @@
     },
     {
       "type": "table",
-      "id": 78,
+      "id": 81,
       "title": "[M19 M40] Базы кластера: xid, размер, соединения",
       "datasource": {
         "type": "prometheus",
@@ -5465,7 +5696,7 @@
         "h": 6,
         "w": 16,
         "x": 8,
-        "y": 144
+        "y": 151
       },
       "targets": [
         {
@@ -5636,20 +5867,20 @@
     },
     {
       "type": "row",
-      "id": 79,
+      "id": 82,
       "title": "11. Логическая репликация — подписки и origin (на стенде пусто)  ·  M11",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 150
+        "y": 157
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 80,
+      "id": 83,
       "title": "[M11] Ошибки подписок /с",
       "datasource": {
         "type": "prometheus",
@@ -5660,7 +5891,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 151
+        "y": 158
       },
       "targets": [
         {
@@ -5714,7 +5945,7 @@
     },
     {
       "type": "timeseries",
-      "id": 81,
+      "id": 84,
       "title": "[M11] Возраст latest_end подписки",
       "datasource": {
         "type": "prometheus",
@@ -5725,7 +5956,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 151
+        "y": 158
       },
       "targets": [
         {
@@ -5770,7 +6001,7 @@
     },
     {
       "type": "timeseries",
-      "id": 82,
+      "id": 85,
       "title": "[M11] Лаг origin, байт",
       "datasource": {
         "type": "prometheus",
@@ -5781,7 +6012,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 151
+        "y": 158
       },
       "targets": [
         {
