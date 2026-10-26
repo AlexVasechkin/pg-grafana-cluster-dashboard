@@ -60,6 +60,11 @@ grafana :3000 (provisioning: datasource + дашборд)
 
 ## Дашборд (grafana/dashboards/pg-tables.json)
 
+Заголовок каждой панели начинается с `[Mnn]` — идентификаторы требований из
+`required_metrics.md`, которые панель закрывает (`[доп]` — вспомогательная панель).
+Здесь живут M21, M27, M28, M32, M33, M34, M36, M40; требования уровня кластера — на
+дашборде «Состояние кластера».
+
 Переменные: `$pg_cluster`, `$db_name`, `$table` (label_values, каскадно).
 Секции:
 1. **Обзор БД** — размер, соединения, cache hit, deadlocks; **таблица «Топ самых
@@ -90,3 +95,37 @@ docker compose up -d
 - Несколько кластеров: свой scrape-таргет с `labels: { pg_cluster: <имя> }` на каждый.
 - Тяжёлые запросы (bloat) — держать `cache_seconds` высоким; не гонять `--deep`.
 - Экспортёру — read-only роль (`pg_monitor`), не суперпользователь.
+
+---
+
+## Кластерный контур: живой Patroni-кластер
+
+Второй дашборд — **«PostgreSQL — состояние кластера»** (`grafana/dashboards/pg-cluster.json`),
+подключён к стенду `../../dialog/dba/patroni_cluster` (сеть `patroni-net`).
+
+```
+pg1 / pg2 / pg3  (Patroni 4.1.5, PG 16.15, scope pg-cluster)
+   ▲ SQL (pg_monitor / суперпользователь стенда)
+pg1-exporter, pg2-exporter, pg3-exporter   ── :9187, только pgcls_*
+   ▲                                          (postgres_exporter/cluster-queries.yaml)
+victoriametrics ── скрейпит ещё и напрямую:
+   ├── patroni:  pg1:8008, pg2:8008, pg3:8008      /metrics (кто лидер, timeline, DCS)
+   └── etcd:     etcd1..3:2379  https + mTLS       /metrics (кворум, смены лидера)
+```
+
+- `pg_cluster` / `node` — target-labels в `victoriametrics/scrape.yml`; роль узла —
+  **метрика** `pgcls_node_is_primary`, не метка (иначе failover рвёт серии).
+- job `postgres` — только узлы Patroni; фикстура стека вынесена в job `postgres-tables`,
+  чтобы якорь фильтров `up{job="postgres"}` не показывал её как «кластер без лидера».
+- Сертификаты etcd монтируются read-only из стенда Patroni
+  (`../../dialog/dba/patroni_cluster/ansible/certs`) — путь зашит в `compose.yaml`.
+
+Запуск: `docker compose up -d` (стенд Patroni должен быть поднят — сеть `patroni-net`
+объявлена external). Проверка таргетов: <http://localhost:8428/targets>.
+
+Креды экспортёров задаются через `.env` (`PG_MON_USER` / `PG_MON_PASSWORD`),
+по умолчанию — суперпользователь тестового стенда. Как создать read-only роль
+`monitoring` — в `CLUSTER-METRICS.md` §11.1.
+
+Подробности: модель метрик — `CLUSTER-METRICS.md` (§3 группы, §11 реализация),
+фильтры — `CLUSTER-FILTERS.md`, требования заказчика — `required_metrics.md` (§10 карта).

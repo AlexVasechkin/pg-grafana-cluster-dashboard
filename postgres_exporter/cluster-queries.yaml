@@ -1,0 +1,507 @@
+# Кластерные метрики PostgreSQL для дашборда «Состояние кластера».
+# Namespace `pgcls_*` (см. CLUSTER-METRICS.md §5.8): отдельно от per-table `pgcol_*`,
+# чтобы развести дашборды и cache_seconds.
+#
+# Правила (CLUSTER-METRICS.md §5):
+#   - один и тот же файл едет на лидера и на реплики: primary-only функции
+#     (pg_current_wal_lsn, pg_is_wal_replay_paused) обёрнуты в CASE по pg_is_in_recovery();
+#   - NULL → 0 через COALESCE, иначе экспортёр пропускает значение;
+#   - pg_lsn отдаём числом через pg_wal_lsn_diff(lsn, '0/0');
+#   - текстовые состояния дублируем числовым кодом;
+#   - метки pg_cluster / node задаёт скрейпер (victoriametrics/scrape.yml), не SQL.
+#
+# Привязка уровней (У / У+ / Б~ / Б= / К) указана в комментарии к каждому namespace.
+
+# --- A. Идентичность и роль узла (У → К) ---------------------------------
+pgcls_node:
+  query: |
+    SELECT
+      (NOT pg_is_in_recovery())::int AS is_primary,
+      pg_is_in_recovery()::int       AS is_in_recovery,
+      COALESCE(extract(epoch FROM now() - pg_postmaster_start_time()), 0) AS uptime_seconds,
+      COALESCE(extract(epoch FROM pg_postmaster_start_time()), 0)         AS start_ts,
+      current_setting('server_version_num')::bigint AS version_num,
+      CASE WHEN pg_is_in_recovery() THEN pg_is_wal_replay_paused()::int ELSE 0 END AS recovery_paused,
+      (SELECT count(*) FROM pg_stat_replication)                          AS standby_count,
+      (SELECT count(*) FROM pg_stat_replication WHERE sync_state = 'sync') AS sync_standby_count,
+      COALESCE(pg_wal_lsn_diff(
+        CASE WHEN pg_is_in_recovery() THEN pg_last_wal_receive_lsn()
+             ELSE pg_current_wal_lsn() END, '0/0'), 0)                    AS wal_lsn
+  metrics:
+    - is_primary: {usage: "GAUGE", description: "1 = primary. count by (pg_cluster) (== 1) != 1 -> нет лидера или split-brain [M01 pg.cluster.leader_count]"}
+    - is_in_recovery: {usage: "GAUGE", description: "Обратный флаг для фильтров"}
+    - uptime_seconds: {usage: "GAUGE", description: "Падение до ~0 = рестарт/failover"}
+    - start_ts: {usage: "GAUGE", description: "Epoch старта postmaster"}
+    - version_num: {usage: "GAUGE", description: "server_version_num — разъезд версий между узлами"}
+    - recovery_paused: {usage: "GAUGE", description: "pg_is_wal_replay_paused() — накат приостановлен"}
+    - standby_count: {usage: "GAUGE", description: "Подключённых получателей WAL [M08 pg.repl.standby_count]"}
+    - sync_standby_count: {usage: "GAUGE", description: "Из них sync_state='sync' [M05 pg.repl.sync_count]"}
+    - wal_lsn: {usage: "GAUGE", description: "Текущий LSN числом (на реплике — last_wal_receive_lsn)"}
+  cache_seconds: 0
+
+# --- B. Репликация, сторона отдающего WAL (У+ application_name) ----------
+pgcls_repl:
+  query: |
+    SELECT
+      r.application_name,
+      COALESCE(host(r.client_addr), 'local') AS client_addr,
+      r.state,
+      r.sync_state,
+      COALESCE(pg_wal_lsn_diff(ref.lsn, r.sent_lsn),   0) AS sent_lag_bytes,
+      COALESCE(pg_wal_lsn_diff(ref.lsn, r.write_lsn),  0) AS write_lag_bytes,
+      COALESCE(pg_wal_lsn_diff(ref.lsn, r.flush_lsn),  0) AS flush_lag_bytes,
+      COALESCE(pg_wal_lsn_diff(ref.lsn, r.replay_lsn), 0) AS replay_lag_bytes,
+      COALESCE(extract(epoch FROM r.write_lag),  0) AS write_lag_seconds,
+      COALESCE(extract(epoch FROM r.flush_lag),  0) AS flush_lag_seconds,
+      COALESCE(extract(epoch FROM r.replay_lag), 0) AS replay_lag_seconds,
+      COALESCE(extract(epoch FROM now() - r.reply_time), 0) AS reply_age_seconds,
+      (r.state = 'streaming')::int AS state_streaming,
+      CASE r.sync_state WHEN 'sync' THEN 2 WHEN 'quorum' THEN 2 WHEN 'potential' THEN 1
+                        WHEN 'async' THEN 0 ELSE -1 END AS sync_state_code
+    FROM pg_stat_replication r
+    CROSS JOIN (SELECT CASE WHEN pg_is_in_recovery() THEN pg_last_wal_receive_lsn()
+                            ELSE pg_current_wal_lsn() END AS lsn) ref
+  metrics:
+    - application_name: {usage: "LABEL", description: "Имя узла-получателя (Patroni ставит name)"}
+    - client_addr: {usage: "LABEL"}
+    - state: {usage: "LABEL", description: "streaming / catchup / backup / startup"}
+    - sync_state: {usage: "LABEL", description: "sync / async / potential / quorum"}
+    - sent_lag_bytes: {usage: "GAUGE", description: "Не отправлено получателю"}
+    - write_lag_bytes: {usage: "GAUGE"}
+    - flush_lag_bytes: {usage: "GAUGE", description: "С sync_state=sync — удержанный лаг, бьёт по коммитам [M06 pg.repl.sync_flush_lag]"}
+    - replay_lag_bytes: {usage: "GAUGE", description: "Главная метрика отставания [M07 pg.repl.async_lag]"}
+    - write_lag_seconds: {usage: "GAUGE"}
+    - flush_lag_seconds: {usage: "GAUGE", description: "[M06 pg.repl.sync_flush_lag]"}
+    - replay_lag_seconds: {usage: "GAUGE", description: "Понятнее байтов для RPO [M07 pg.repl.async_lag]"}
+    - reply_age_seconds: {usage: "GAUGE", description: "now()-reply_time: реплика молчит"}
+    - state_streaming: {usage: "GAUGE", description: "1 = streaming; длительный catchup = проблема"}
+    - sync_state_code: {usage: "GAUGE", description: "async=0, potential=1, sync/quorum=2"}
+  cache_seconds: 0
+
+# --- C. Репликация, сторона получателя WAL (У) ---------------------------
+pgcls_recv:
+  query: |
+    SELECT
+      COALESCE((SELECT 1 FROM pg_stat_wal_receiver LIMIT 1), 0) AS active,
+      COALESCE((SELECT extract(epoch FROM now() - last_msg_receipt_time)
+                  FROM pg_stat_wal_receiver LIMIT 1), 0)        AS msg_age_seconds,
+      COALESCE(extract(epoch FROM now() - pg_last_xact_replay_timestamp()), 0) AS replay_delay_seconds,
+      COALESCE(pg_wal_lsn_diff(pg_last_wal_receive_lsn(), '0/0'), 0) AS receive_lsn,
+      COALESCE(pg_wal_lsn_diff(pg_last_wal_replay_lsn(),  '0/0'), 0) AS replay_lsn,
+      COALESCE(pg_wal_lsn_diff(pg_last_wal_receive_lsn(),
+                               pg_last_wal_replay_lsn()), 0)         AS replay_diff_bytes
+  metrics:
+    - active: {usage: "GAUGE", description: "0 на реплике = накат оборван"}
+    - msg_age_seconds: {usage: "GAUGE", description: "now()-last_msg_receipt_time: сендер молчит"}
+    - replay_delay_seconds: {usage: "GAUGE", description: "Отставание наката с точки зрения самой реплики"}
+    - receive_lsn: {usage: "GAUGE"}
+    - replay_lsn: {usage: "GAUGE"}
+    - replay_diff_bytes: {usage: "GAUGE", description: "WAL получен, но не применён: конфликт recovery или долгий запрос"}
+  cache_seconds: 0
+
+# --- D. Слоты репликации (У+ slot_name) — НЕ реплицируются, собирать со всех
+pgcls_slot:
+  query: |
+    SELECT
+      s.slot_name,
+      s.slot_type,
+      COALESCE(s.plugin, '')   AS plugin,
+      COALESCE(s.database, '') AS database,
+      s.active::int AS active,
+      COALESCE(pg_wal_lsn_diff(ref.lsn, s.restart_lsn), 0) AS retained_bytes,
+      COALESCE(s.safe_wal_size, 0) AS safe_wal_size_bytes,
+      CASE s.wal_status WHEN 'reserved' THEN 0 WHEN 'extended' THEN 1
+                        WHEN 'unreserved' THEN 2 WHEN 'lost' THEN 3 ELSE -1 END AS wal_status_code,
+      COALESCE(s.conflicting::int, 0) AS conflicting,
+      COALESCE(age(s.xmin), 0)         AS xmin_age,
+      COALESCE(age(s.catalog_xmin), 0) AS catalog_xmin_age
+    FROM pg_replication_slots s
+    CROSS JOIN (SELECT CASE WHEN pg_is_in_recovery() THEN pg_last_wal_receive_lsn()
+                            ELSE pg_current_wal_lsn() END AS lsn) ref
+  metrics:
+    - slot_name: {usage: "LABEL"}
+    - slot_type: {usage: "LABEL", description: "physical / logical"}
+    - plugin: {usage: "LABEL"}
+    - database: {usage: "LABEL"}
+    - active: {usage: "GAUGE", description: "0 у постоянного слота — частая причина переполнения pg_wal [M09 pg.repl.slot_retained]"}
+    - retained_bytes: {usage: "GAUGE", description: "Сколько WAL держит слот [M09 pg.repl.slot_retained / M10 pg.repl.log_slot_retained]"}
+    - safe_wal_size_bytes: {usage: "GAUGE", description: "Сколько ещё можно сгенерить до wal_status=lost"}
+    - wal_status_code: {usage: "GAUGE", description: "reserved=0, extended=1, unreserved=2, lost=3"}
+    - conflicting: {usage: "GAUGE", description: "PG16+: слот сломан конфликтом recovery"}
+    - xmin_age: {usage: "GAUGE", description: "Слот тормозит vacuum на всём узле [M23 pg.sess.xmin_horizon]"}
+    - catalog_xmin_age: {usage: "GAUGE", description: "То же для каталога — логические слоты [M10 pg.repl.log_slot_retained]"}
+  cache_seconds: 15
+
+# --- E. WAL и checkpoint (У) ---------------------------------------------
+pgcls_wal:
+  query: |
+    SELECT
+      w.wal_records       AS records,
+      w.wal_fpi           AS fpi,
+      w.wal_bytes         AS bytes,
+      w.wal_buffers_full  AS buffers_full,
+      w.wal_write         AS writes,
+      w.wal_sync          AS syncs,
+      w.wal_write_time    AS write_time_ms,
+      w.wal_sync_time     AS sync_time_ms,
+      d.dir_bytes,
+      d.dir_files
+    FROM pg_stat_wal w
+    CROSS JOIN (SELECT COALESCE(sum(size), 0) AS dir_bytes, count(*) AS dir_files
+                FROM pg_ls_waldir()) d
+  metrics:
+    - records: {usage: "COUNTER"}
+    - fpi: {usage: "COUNTER", description: "Высокий fpi -> слишком частые checkpoint"}
+    - bytes: {usage: "COUNTER", description: "rate() = скорость генерации WAL [M16 pg.wal.bytes_rate]"}
+    - buffers_full: {usage: "COUNTER", description: "Мало wal_buffers"}
+    - writes: {usage: "COUNTER"}
+    - syncs: {usage: "COUNTER"}
+    - write_time_ms: {usage: "COUNTER", description: "Нужен track_io_timing=on"}
+    - sync_time_ms: {usage: "COUNTER", description: "Нужен track_io_timing=on"}
+    - dir_bytes: {usage: "GAUGE", description: "Фактический объём pg_wal (pg_ls_waldir)"}
+    - dir_files: {usage: "GAUGE"}
+  cache_seconds: 15
+
+pgcls_ckpt:
+  query: |
+    SELECT checkpoints_timed     AS timed,
+           checkpoints_req       AS req,
+           checkpoint_write_time AS write_time_ms,
+           checkpoint_sync_time  AS sync_time_ms
+    FROM pg_stat_bgwriter
+  metrics:
+    - timed: {usage: "COUNTER", description: "Checkpoint по расписанию [M17 pg.wal.ckpt_req_ratio]"}
+    - req: {usage: "COUNTER", description: "Checkpoint по требованию: доля велика -> мал max_wal_size [M17 pg.wal.ckpt_req_ratio]"}
+    - write_time_ms: {usage: "COUNTER"}
+    - sync_time_ms: {usage: "COUNTER"}
+  cache_seconds: 15
+
+pgcls_buffers:
+  query: |
+    SELECT buffers_checkpoint    AS checkpoint,
+           buffers_clean         AS clean,
+           buffers_backend       AS backend,
+           buffers_backend_fsync AS backend_fsync,
+           maxwritten_clean,
+           buffers_alloc         AS alloc
+    FROM pg_stat_bgwriter
+  metrics:
+    - checkpoint: {usage: "COUNTER"}
+    - clean: {usage: "COUNTER"}
+    - backend: {usage: "COUNTER", description: "Велик -> bgwriter не справляется"}
+    - backend_fsync: {usage: "COUNTER", description: "Бэкенд сам делает fsync — IO насыщен [M18 pg.wal.backend_fsync]"}
+    - maxwritten_clean: {usage: "COUNTER", description: "bgwriter прерывается по лимиту"}
+    - alloc: {usage: "COUNTER"}
+  cache_seconds: 15
+
+pgcls_archiver:
+  query: |
+    SELECT
+      a.archived_count,
+      a.failed_count,
+      COALESCE(extract(epoch FROM now() - a.last_archived_time), 0) AS last_archived_age_seconds,
+      COALESCE(extract(epoch FROM now() - a.last_failed_time), 0)   AS last_failed_age_seconds,
+      (current_setting('archive_mode') IN ('on', 'always'))::int    AS mode_on,
+      q.ready_count,
+      q.done_count
+    FROM pg_stat_archiver a
+    CROSS JOIN (SELECT count(*) FILTER (WHERE name LIKE '%.ready') AS ready_count,
+                       count(*) FILTER (WHERE name LIKE '%.done')  AS done_count
+                FROM pg_ls_archive_statusdir()) q
+  metrics:
+    - archived_count: {usage: "COUNTER", description: "Архивация идёт"}
+    - failed_count: {usage: "COUNTER", description: "Рост = PITR ломается, WAL копится [M12 pg.arch.failed]"}
+    - last_archived_age_seconds: {usage: "GAUGE", description: "Архиватор замер"}
+    - last_failed_age_seconds: {usage: "GAUGE"}
+    - mode_on: {usage: "GAUGE", description: "archive_mode in (on, always)"}
+    - ready_count: {usage: "GAUGE", description: "Очередь архивации: сегментов .ready [M13 pg.arch.ready_queue]"}
+    - done_count: {usage: "GAUGE", description: "Архивировано и помечено .done"}
+  cache_seconds: 15
+
+# --- F. Сессии, блокировки, автовакуум (У) -------------------------------
+pgcls_sess:
+  query: |
+    SELECT
+      (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') AS max_connections,
+      count(*) FILTER (WHERE a.backend_type = 'client backend')             AS backends_total,
+      count(*) FILTER (WHERE a.backend_type = 'client backend' AND a.state = 'active')  AS backends_active,
+      count(*) FILTER (WHERE a.state = 'idle in transaction')               AS backends_idle_in_xact,
+      round(100.0 * count(*) FILTER (WHERE a.backend_type = 'client backend')
+            / (SELECT setting::numeric FROM pg_settings WHERE name = 'max_connections'), 2) AS conn_used_pct,
+      COALESCE(max(extract(epoch FROM now() - a.xact_start))
+               FILTER (WHERE a.state <> 'idle'), 0)                        AS oldest_xact_age_seconds,
+      COALESCE(max(extract(epoch FROM now() - a.query_start))
+               FILTER (WHERE a.state = 'active' AND a.backend_type = 'client backend'), 0) AS oldest_query_age_seconds,
+      COALESCE(max(extract(epoch FROM now() - a.state_change))
+               FILTER (WHERE a.state = 'idle in transaction'), 0)          AS oldest_idle_in_xact_seconds,
+      count(*) FILTER (WHERE a.backend_type = 'client backend' AND a.state = 'active'
+                         AND now() - a.query_start > interval '60 seconds')  AS long_running_60s,
+      count(*) FILTER (WHERE a.backend_type = 'client backend' AND a.state = 'active'
+                         AND now() - a.query_start > interval '300 seconds') AS long_running_300s,
+      count(*) FILTER (WHERE a.backend_type = 'autovacuum worker')          AS autovacuum_workers_running,
+      count(*) FILTER (WHERE a.backend_type = 'autovacuum worker'
+                         AND a.query ~* 'to prevent wraparound')           AS autovacuum_antiwrap_running,
+      COALESCE(max(age(a.backend_xmin)), 0)                                AS backend_xmin_age,
+      (SELECT count(*) FROM pg_locks WHERE NOT granted)                    AS locks_not_granted,
+      (SELECT count(*) FROM pg_prepared_xacts)                             AS prepared_xacts_count,
+      (SELECT COALESCE(extract(epoch FROM now() - min(prepared)), 0) FROM pg_prepared_xacts) AS oldest_prepared_xact_seconds
+    FROM pg_stat_activity a
+  metrics:
+    - max_connections: {usage: "GAUGE", description: "Знаменатель для насыщения"}
+    - backends_total: {usage: "GAUGE"}
+    - backends_active: {usage: "GAUGE", description: "state=active — реальная параллельность"}
+    - backends_idle_in_xact: {usage: "GAUGE", description: "Держит xmin, блокирует vacuum [M25 pg.sess.idle_in_trx]"}
+    - conn_used_pct: {usage: "GAUGE", description: "Насыщение слотов подключений, % [M24 pg.sess.conn_pct]"}
+    - oldest_xact_age_seconds: {usage: "GAUGE"}
+    - oldest_query_age_seconds: {usage: "GAUGE", description: "Долгий запрос держит снапшот и локи [M29 pg.qry.long_running]"}
+    - oldest_idle_in_xact_seconds: {usage: "GAUGE", description: "Главный враг wraparound [M25 pg.sess.idle_in_trx]"}
+    - long_running_60s: {usage: "GAUGE", description: "Активных запросов дольше 60 с [M29 pg.qry.long_running]"}
+    - long_running_300s: {usage: "GAUGE", description: "Активных запросов дольше 300 с [M29 pg.qry.long_running]"}
+    - autovacuum_workers_running: {usage: "GAUGE", description: "Против autovacuum_max_workers [M22 pg.vac.workers_set]"}
+    - autovacuum_antiwrap_running: {usage: "GAUGE", description: "Воркеров в режиме to prevent wraparound [M20 pg.vac.antiwrap_running]"}
+    - backend_xmin_age: {usage: "GAUGE", description: "Кто держит горизонт — сессия [M23 pg.sess.xmin_horizon]"}
+    - locks_not_granted: {usage: "GAUGE", description: "Очередь блокировок [M26 pg.sess.lock_waiters]"}
+    - prepared_xacts_count: {usage: "GAUGE", description: "Забытый 2PC держит WAL и xmin вечно"}
+    - oldest_prepared_xact_seconds: {usage: "GAUGE", description: "[M23 pg.sess.xmin_horizon]"}
+  cache_seconds: 0
+
+# --- F2. Блокировки по типам (У+ mode, granted) --------------------------
+# Разрез суммарного pgcls_sess_locks_not_granted: какой именно режим блокировки
+# и сколько их ждёт/держится. Кардинальность: ~8 режимов × granted(2) × узлы.
+pgcls_locks:
+  query: |
+    SELECT l.mode,
+           l.granted::text AS granted,
+           count(*)        AS count
+    FROM pg_locks l
+    GROUP BY l.mode, l.granted
+  metrics:
+    - mode: {usage: "LABEL", description: "Режим блокировки: AccessShareLock … AccessExclusiveLock"}
+    - granted: {usage: "LABEL", description: "true = блокировка взята, false = сессия ждёт в очереди"}
+    - count: {usage: "GAUGE", description: "Число блокировок этого режима [M26 pg.sess.lock_waiters]"}
+  cache_seconds: 0
+
+# --- G/H. Базы: wraparound (Б=) + счётчики нагрузки (Б~) -----------------
+pgcls_db:
+  query: |
+    SELECT
+      d.datname AS db_name,
+      age(d.datfrozenxid)    AS xid_age,
+      mxid_age(d.datminmxid) AS mxid_age,
+      round(100.0 * age(d.datfrozenxid)
+            / current_setting('autovacuum_freeze_max_age')::bigint, 2) AS xid_pct,
+      pg_database_size(d.oid) AS size_bytes,
+      s.numbackends,
+      s.xact_commit,
+      s.xact_rollback,
+      s.blks_read,
+      s.blks_hit,
+      CASE WHEN s.blks_hit + s.blks_read > 0
+           THEN round(100.0 * s.blks_hit / (s.blks_hit + s.blks_read), 2)
+           ELSE 100 END AS cache_hit_ratio,
+      s.deadlocks,
+      s.temp_files,
+      s.temp_bytes,
+      COALESCE(s.checksum_failures, 0) AS checksum_failures,
+      s.conflicts,
+      s.blk_read_time,
+      s.blk_write_time,
+      s.sessions,
+      s.sessions_abandoned,
+      s.sessions_fatal,
+      s.sessions_killed,
+      s.active_time,
+      s.idle_in_transaction_time
+    FROM pg_database d
+    JOIN pg_stat_database s ON s.datid = d.oid
+    WHERE d.datallowconn AND NOT d.datistemplate
+  metrics:
+    - db_name: {usage: "LABEL"}
+    - xid_age: {usage: "GAUGE", description: "age(datfrozenxid); Б= — агрегировать max by (pg_cluster, db_name) [M19 pg.vac.xid_age]"}
+    - mxid_age: {usage: "GAUGE", description: "Против autovacuum_multixact_freeze_max_age [M19 pg.vac.xid_age]"}
+    - xid_pct: {usage: "GAUGE", description: "% от autovacuum_freeze_max_age [M19 pg.vac.xid_age]"}
+    - size_bytes: {usage: "GAUGE", description: "Размер БД; сумма по БД = прогноз диска [M40 pg.io.growth]"}
+    - numbackends: {usage: "GAUGE"}
+    - xact_commit: {usage: "COUNTER", description: "TPS; брать с лидера [M28 pg.qry.rollback_ratio]"}
+    - xact_rollback: {usage: "COUNTER", description: "Всплеск ошибок приложения [M28 pg.qry.rollback_ratio]"}
+    - blks_read: {usage: "COUNTER"}
+    - blks_hit: {usage: "COUNTER"}
+    - cache_hit_ratio: {usage: "GAUGE", description: "< 95 % -> мал shared_buffers"}
+    - deadlocks: {usage: "COUNTER", description: "Любой рост — к разбору"}
+    - temp_files: {usage: "COUNTER"}
+    - temp_bytes: {usage: "COUNTER", description: "Спиллы на диск: мал work_mem [M21 pg.vac.temp_bytes]"}
+    - checksum_failures: {usage: "COUNTER", description: "Повреждение данных, crit немедленно [M38 pg.io.checksum_fail]"}
+    - conflicts: {usage: "COUNTER", description: "Отмены запросов на standby"}
+    - blk_read_time: {usage: "COUNTER", description: "Суррогат disk latency, нужен track_io_timing [M39 pg.io.disk_latency]"}
+    - blk_write_time: {usage: "COUNTER", description: "Нужен track_io_timing [M39 pg.io.disk_latency]"}
+    - sessions: {usage: "COUNTER"}
+    - sessions_abandoned: {usage: "COUNTER"}
+    - sessions_fatal: {usage: "COUNTER"}
+    - sessions_killed: {usage: "COUNTER"}
+    - active_time: {usage: "COUNTER"}
+    - idle_in_transaction_time: {usage: "COUNTER"}
+  cache_seconds: 15
+
+pgcls_tablespace:
+  query: |
+    SELECT spcname, pg_tablespace_size(oid) AS size_bytes
+    FROM pg_tablespace
+    WHERE spcname NOT LIKE 'pg_global'
+  metrics:
+    - spcname: {usage: "LABEL"}
+    - size_bytes: {usage: "GAUGE", description: "Диск под tablespace [M40 pg.io.growth]"}
+  cache_seconds: 300
+
+# --- I. Конфигурация как метрика (У+ name) -------------------------------
+pgcls_setting:
+  query: |
+    SELECT
+      name,
+      COALESCE(setting, '') AS value_text,
+      CASE WHEN setting ~ '^-?[0-9]+$' THEN setting::numeric ELSE -1 END AS value,
+      CASE WHEN setting IN ('on', 'always', 'true')  THEN 1
+           WHEN setting IN ('off', 'false')          THEN 0
+           ELSE -1 END AS flag
+    FROM pg_settings
+    WHERE name IN (
+      'max_connections', 'shared_buffers', 'work_mem', 'maintenance_work_mem',
+      'max_wal_size', 'min_wal_size', 'checkpoint_timeout', 'wal_keep_size',
+      'autovacuum_max_workers', 'autovacuum_freeze_max_age',
+      'autovacuum_multixact_freeze_max_age', 'autovacuum_vacuum_cost_limit',
+      'max_replication_slots', 'max_wal_senders', 'max_worker_processes',
+      'statement_timeout', 'idle_in_transaction_session_timeout',
+      'archive_mode', 'archive_timeout', 'hot_standby_feedback',
+      'synchronous_commit', 'synchronous_standby_names', 'track_io_timing',
+      'fsync', 'full_page_writes', 'data_checksums', 'wal_log_hints', 'wal_level'
+    )
+  metrics:
+    - name: {usage: "LABEL"}
+    - value_text: {usage: "LABEL", description: "Строковое значение — для таблицы расхождений"}
+    - value: {usage: "GAUGE", description: "Числовое значение GUC (-1 = не число)"}
+    - flag: {usage: "GAUGE", description: "on=1, off=0, -1 = не булев"}
+  cache_seconds: 60
+
+pgcls_config:
+  query: |
+    SELECT
+      (SELECT count(*) FROM pg_settings WHERE pending_restart) AS pending_restart_count,
+      COALESCE(extract(epoch FROM now() - pg_conf_load_time()), 0) AS reload_age_seconds
+  metrics:
+    - pending_restart_count: {usage: "GAUGE", description: "Конфиг применён не полностью"}
+    - reload_age_seconds: {usage: "GAUGE", description: "now() - pg_conf_load_time()"}
+  cache_seconds: 60
+
+# --- J. Прогресс длительных операций (У+ pid) ----------------------------
+pgcls_progress_vacuum:
+  query: |
+    SELECT
+      p.pid::text AS pid,
+      COALESCE(d.datname, '') AS db_name,
+      COALESCE(c.relname, '') AS "table",
+      p.phase,
+      p.heap_blks_total,
+      p.heap_blks_scanned,
+      p.heap_blks_vacuumed,
+      p.index_vacuum_count,
+      CASE WHEN p.heap_blks_total > 0
+           THEN round(100.0 * p.heap_blks_scanned / p.heap_blks_total, 2)
+           ELSE 0 END AS scanned_pct
+    FROM pg_stat_progress_vacuum p
+    LEFT JOIN pg_database d ON d.oid = p.datid
+    LEFT JOIN pg_class c    ON c.oid = p.relid
+  metrics:
+    - pid: {usage: "LABEL"}
+    - db_name: {usage: "LABEL"}
+    - table: {usage: "LABEL", description: "Пусто, если таблица в другой БД"}
+    - phase: {usage: "LABEL"}
+    - heap_blks_total: {usage: "GAUGE"}
+    - heap_blks_scanned: {usage: "GAUGE"}
+    - heap_blks_vacuumed: {usage: "GAUGE"}
+    - index_vacuum_count: {usage: "GAUGE"}
+    - scanned_pct: {usage: "GAUGE", description: "Успеет ли антивраппараунд-вакуум [M20 pg.vac.antiwrap_running]"}
+  cache_seconds: 0
+
+pgcls_progress_basebackup:
+  query: |
+    SELECT
+      p.pid::text AS pid,
+      p.phase,
+      COALESCE(p.backup_total, 0)    AS backup_total,
+      COALESCE(p.backup_streamed, 0) AS backup_streamed,
+      COALESCE(p.tablespaces_total, 0)    AS tablespaces_total,
+      COALESCE(p.tablespaces_streamed, 0) AS tablespaces_streamed
+    FROM pg_stat_progress_basebackup p
+  metrics:
+    - pid: {usage: "LABEL"}
+    - phase: {usage: "LABEL"}
+    - backup_total: {usage: "GAUGE", description: "Patroni поднимает реплику — видно на дашборде"}
+    - backup_streamed: {usage: "GAUGE"}
+    - tablespaces_total: {usage: "GAUGE"}
+    - tablespaces_streamed: {usage: "GAUGE"}
+  cache_seconds: 0
+
+# --- Логическая репликация: подписки и origin (У+) -----------------------
+pgcls_sub:
+  query: |
+    SELECT
+      s.subname,
+      COALESCE(st.apply_error_count, 0) AS apply_error_count,
+      COALESCE(st.sync_error_count, 0)  AS sync_error_count,
+      COALESCE((SELECT count(*) FROM pg_stat_subscription x WHERE x.subid = s.oid), 0) AS worker_count,
+      COALESCE((SELECT extract(epoch FROM now() - max(x.latest_end_time))
+                  FROM pg_stat_subscription x WHERE x.subid = s.oid), 0) AS latest_end_age_seconds,
+      s.subenabled::int AS enabled
+    FROM pg_subscription s
+    LEFT JOIN pg_stat_subscription_stats st ON st.subid = s.oid
+  metrics:
+    - subname: {usage: "LABEL"}
+    - apply_error_count: {usage: "COUNTER", description: "Подписка падает на применении [M11 pg.subscription_origin]"}
+    - sync_error_count: {usage: "COUNTER", description: "[M11 pg.subscription_origin]"}
+    - worker_count: {usage: "GAUGE", description: "Воркеры подписки живы"}
+    - latest_end_age_seconds: {usage: "GAUGE", description: "Подписчик отстал/замер [M11 pg.subscription_origin]"}
+    - enabled: {usage: "GAUGE"}
+  cache_seconds: 15
+
+pgcls_origin:
+  query: |
+    SELECT
+      external_id AS origin,
+      COALESCE(pg_wal_lsn_diff(remote_lsn, '0/0'), 0) AS remote_lsn,
+      COALESCE(pg_wal_lsn_diff(local_lsn,  '0/0'), 0) AS local_lsn
+    FROM pg_replication_origin_status
+  metrics:
+    - origin: {usage: "LABEL"}
+    - remote_lsn: {usage: "GAUGE", description: "Докуда применён поток от издателя [M11 pg.subscription_origin]"}
+    - local_lsn: {usage: "GAUGE", description: "Соответствующий локальный LSN [M11 pg.subscription_origin]"}
+  cache_seconds: 15
+
+# --- Запросы: точный QPS [M42 pg.qry.qps] --------------------------------
+# ВЫКЛЮЧЕНО НАМЕРЕННО. На кластере pg-cluster `shared_preload_libraries` пуст,
+# расширения pg_stat_statements нет (оно есть в pg_available_extensions, но не
+# загружено). Запрос к отсутствующей вьюхе падает ещё на разборе — CASE/COALESCE
+# не спасают, — и экспортёр писал бы ошибку в лог на каждый скрейп.
+#
+# Чтобы включить точный QPS:
+#   1) patronictl -c /etc/patroni/patroni.yml edit-config
+#        postgresql.parameters.shared_preload_libraries: pg_stat_statements
+#      и рестарт всех узлов (shared_preload_libraries меняется только рестартом);
+#   2) CREATE EXTENSION pg_stat_statements;  -- на лидере
+#   3) раскомментировать блок ниже и `docker compose restart pg1-exporter pg2-exporter pg3-exporter`.
+#
+# До этого панель «[M42] QPS — запросов/с» показывает только вторую серию —
+# оценку по транзакциям (для autocommit-нагрузки она равна QPS).
+#
+# pgcls_stmt:
+#   query: |
+#     SELECT COALESCE(sum(s.calls), 0)           AS calls,
+#            COALESCE(sum(s.total_exec_time), 0) AS total_exec_time_ms,
+#            COALESCE(sum(s.rows), 0)            AS rows,
+#            count(*)                            AS statements
+#     FROM pg_stat_statements s
+#     WHERE s.dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+#   metrics:
+#     - calls: {usage: "COUNTER", description: "Вызовов запросов: rate() = QPS [M42 pg.qry.qps]"}
+#     - total_exec_time_ms: {usage: "COUNTER", description: "Суммарное время выполнения, мс"}
+#     - rows: {usage: "COUNTER", description: "Обработано строк"}
+#     - statements: {usage: "GAUGE", description: "Разных нормализованных запросов в pg_stat_statements"}
+#   cache_seconds: 15

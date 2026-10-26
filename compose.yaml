@@ -1,6 +1,36 @@
 # Тестовое окружение мониторинга: postgres + postgres_exporter + VictoriaMetrics + Grafana.
 # Отдельный от pg-collector/docker/compose.yaml стек (свой postgres с той же фикстурой),
 # порт postgres наружу не публикуется — экспортёр ходит по внутренней сети.
+#
+# Дополнительно подключён ЖИВОЙ Patroni-кластер из ../../dialog/dba/patroni_cluster
+# (сеть patroni-net, узлы pg1/pg2/pg3, etcd1-3, Patroni REST :8008):
+#   - по одному postgres_exporter на узел (cluster-queries.yaml, namespace pgcls_*);
+#   - VictoriaMetrics сама скрейпит Patroni /metrics и etcd /metrics (mTLS).
+# Сеть patroni-net объявлена external — стек Patroni должен быть запущен.
+#
+# Креды экспортёров: по умолчанию суперпользователь тестового кластера.
+# В проде (и когда появится роль) — переопределить через .env:
+#   PG_MON_USER=monitoring
+#   PG_MON_PASSWORD=...
+# Роль создаётся так (на лидере):
+#   CREATE ROLE monitoring LOGIN PASSWORD '...'; GRANT pg_monitor TO monitoring;
+
+networks:
+  # Сеть живого Patroni-стенда (создана его compose; здесь только подключаемся)
+  patroni-net:
+    external: true
+  default: {}
+
+# Общее для трёх экспортёров Patroni-кластера
+x-cluster-exporter: &cluster-exporter
+  image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+  volumes:
+    - ./postgres_exporter/cluster-queries.yaml:/etc/pg_exporter/cluster-queries.yaml:ro
+  networks:
+    - default
+    - patroni-net
+  restart: unless-stopped
+
 services:
   pgmon:
     image: postgres:16
@@ -33,6 +63,31 @@ services:
       pgmon:
         condition: service_healthy
 
+  # --- экспортёры живого Patroni-кластера (namespace pgcls_*) --------------
+  pg1-exporter:
+    <<: *cluster-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${PG_MON_USER:-postgres}:${PG_MON_PASSWORD:-postgres_pass}@pg1:5432/postgres?sslmode=disable"
+      PG_EXPORTER_EXTEND_QUERY_PATH: /etc/pg_exporter/cluster-queries.yaml
+      PG_EXPORTER_DISABLE_DEFAULT_METRICS: "true"
+      PG_EXPORTER_DISABLE_SETTINGS_METRICS: "true"
+
+  pg2-exporter:
+    <<: *cluster-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${PG_MON_USER:-postgres}:${PG_MON_PASSWORD:-postgres_pass}@pg2:5432/postgres?sslmode=disable"
+      PG_EXPORTER_EXTEND_QUERY_PATH: /etc/pg_exporter/cluster-queries.yaml
+      PG_EXPORTER_DISABLE_DEFAULT_METRICS: "true"
+      PG_EXPORTER_DISABLE_SETTINGS_METRICS: "true"
+
+  pg3-exporter:
+    <<: *cluster-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${PG_MON_USER:-postgres}:${PG_MON_PASSWORD:-postgres_pass}@pg3:5432/postgres?sslmode=disable"
+      PG_EXPORTER_EXTEND_QUERY_PATH: /etc/pg_exporter/cluster-queries.yaml
+      PG_EXPORTER_DISABLE_DEFAULT_METRICS: "true"
+      PG_EXPORTER_DISABLE_SETTINGS_METRICS: "true"
+
   victoriametrics:
     image: victoriametrics/victoria-metrics:v1.103.0
     command:
@@ -40,10 +95,18 @@ services:
       - -retentionPeriod=1
     volumes:
       - ./victoriametrics/scrape.yml:/etc/vm/scrape.yml:ro
+      # Клиентские сертификаты etcd (mTLS) — только чтение, из стенда Patroni
+      - ../../dialog/dba/patroni_cluster/ansible/certs:/etc/vm/certs:ro
+    networks:
+      - default
+      - patroni-net
     ports:
       - "8428:8428"
     depends_on:
       - postgres-exporter
+      - pg1-exporter
+      - pg2-exporter
+      - pg3-exporter
 
   grafana:
     image: grafana/grafana:11.1.0

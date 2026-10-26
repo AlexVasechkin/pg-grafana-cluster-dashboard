@@ -1,12 +1,74 @@
 # Scrape-конфиг для VictoriaMetrics (single-node, -promscrape.config).
-# Метка pg_cluster задаётся здесь как target-label — так метки кластера живут
-# в конфиге сбора, а не в SQL экспортёра.
+#
+# Метки pg_cluster / node задаются здесь как target-labels (CLUSTER-METRICS.md §2):
+# роль узла меткой НЕ делаем — она ездит при failover, её отдаёт метрика
+# pgcls_node_is_primary.
+#
+# Соглашение для одиночных серверов без Patroni: pg_cluster == node
+# (CLUSTER-FILTERS.md §6.1). Метка ha=patroni|none позволяет отличать
+# «реплик нет, потому что их и не должно быть» от «кластер потерял реплики».
 global:
   scrape_interval: 15s
 
 scrape_configs:
-  - job_name: postgres
+  # ---------------------------------------------------------------
+  # 1. Локальная тестовая БД стека (фикстура) — дашборд «таблицы», pgcol_*.
+  #    Job отдельный, чтобы якорь up{job="postgres"} в фильтрах кластерного
+  #    дашборда видел только узлы Patroni (CLUSTER-FILTERS.md §2).
+  # ---------------------------------------------------------------
+  - job_name: postgres-tables
     static_configs:
       - targets: ["postgres-exporter:9187"]
         labels:
           pg_cluster: shop-cluster
+          node: shop-cluster
+          ha: none
+
+  # ---------------------------------------------------------------
+  # 2. Живой Patroni-кластер pg-cluster: по экспортёру на узел, pgcls_*.
+  # ---------------------------------------------------------------
+  - job_name: postgres
+    static_configs:
+      - targets: ["pg1-exporter:9187"]
+        labels: { pg_cluster: pg-cluster, node: pg1, ha: patroni }
+      - targets: ["pg2-exporter:9187"]
+        labels: { pg_cluster: pg-cluster, node: pg2, ha: patroni }
+      - targets: ["pg3-exporter:9187"]
+        labels: { pg_cluster: pg-cluster, node: pg3, ha: patroni }
+
+  # ---------------------------------------------------------------
+  # 3. Patroni REST /metrics — то, чего postgres_exporter дать не может
+  #    (CLUSTER-METRICS.md §6): кто лидер по версии DCS, timeline,
+  #    pending_restart, paused, dcs_last_seen.
+  #    GET-эндпоинты Patroni открыты, basic-auth нужен только для записи.
+  # ---------------------------------------------------------------
+  - job_name: patroni
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["pg1:8008"]
+        labels: { pg_cluster: pg-cluster, node: pg1 }
+      - targets: ["pg2:8008"]
+        labels: { pg_cluster: pg-cluster, node: pg2 }
+      - targets: ["pg3:8008"]
+        labels: { pg_cluster: pg-cluster, node: pg3 }
+
+  # ---------------------------------------------------------------
+  # 4. etcd /metrics — здоровье DCS (кворум, смены лидера).
+  #    Клиентский порт под mTLS (client-cert-auth: true), поэтому
+  #    предъявляем client.crt/key из стенда Patroni. SAN серверных сертов
+  #    содержит DNS:etcdN, поэтому targets — по именам контейнеров.
+  # ---------------------------------------------------------------
+  - job_name: etcd
+    scheme: https
+    metrics_path: /metrics
+    tls_config:
+      ca_file: /etc/vm/certs/ca.crt
+      cert_file: /etc/vm/certs/client.crt
+      key_file: /etc/vm/certs/client.key
+    static_configs:
+      - targets: ["etcd1:2379"]
+        labels: { pg_cluster: pg-cluster, etcd_node: etcd1 }
+      - targets: ["etcd2:2379"]
+        labels: { pg_cluster: pg-cluster, etcd_node: etcd2 }
+      - targets: ["etcd3:2379"]
+        labels: { pg_cluster: pg-cluster, etcd_node: etcd3 }
