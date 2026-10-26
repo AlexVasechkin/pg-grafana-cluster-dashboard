@@ -236,6 +236,14 @@ scrape_configs:
         labels: { pg_cluster: srv-db-02, node: srv-db-02, ha: none }
 ```
 
+На стенде это сделано для контейнера `subscriber` (standalone-подписчик логической
+репликации): `pg_cluster: subscriber, node: subscriber, ha: none`. Проверено, что
+соглашение работает именно так, как здесь описано: в фильтре «Кластер / сервер» два
+значения (`pg-cluster`, `subscriber`), а каскад по `subscriber` даёт ровно один узел.
+Заодно подтвердился выбор якоря `up`: PostgreSQL в контейнере ещё не поднят, и при
+якоре `pg_up` или `pgcls_*` сервер в списке бы **не появился** вовсе (`up=1`,
+`pg_up=0`).
+
 Проверено на живом VM с ровно такой смесью целей:
 
 - `label_values(up{job="postgres"}, pg_cluster)` → `['pg-cluster', 'srv-db-01']` —

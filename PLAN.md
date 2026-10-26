@@ -104,14 +104,28 @@ docker compose up -d
 подключён к стенду `../../dialog/dba/patroni_cluster` (сеть `patroni-net`).
 
 ```
-pg1 / pg2 / pg3  (Patroni 4.1.5, PG 16.15, scope pg-cluster)
-   ▲ SQL (pg_monitor / суперпользователь стенда)
-pg1-exporter, pg2-exporter, pg3-exporter   ── :9187, только pgcls_*
+pg1 / pg2 / pg3  (Patroni 4.1.5, PG 16.15, scope pg-cluster)   subscriber (standalone)
+   ▲ SQL (pg_monitor / суперпользователь стенда)                  ▲ SQL
+pg1-exporter, pg2-exporter, pg3-exporter   ── :9187          subscriber-exporter :9187
    ▲                                          (postgres_exporter/cluster-queries.yaml)
 victoriametrics ── скрейпит ещё и напрямую:
    ├── patroni:  pg1:8008, pg2:8008, pg3:8008      /metrics (кто лидер, timeline, DCS)
    └── etcd:     etcd1..3:2379  https + mTLS       /metrics (кворум, смены лидера)
 ```
+
+На всех четырёх узлах (pg1/pg2/pg3 + subscriber) стоит **prometheus-node-exporter**
+(:9100, job `node`) — CPU, память, swap, диски, место на ФС, OOM, состояние
+systemd-юнитов `patroni/postgresql`. Конфиг — `/etc/default/prometheus-node-exporter`,
+подробности и ограничения в контейнерах — `CLUSTER-METRICS.md` §11.6.
+
+`subscriber` подключён по соглашению `pg_cluster == node` (standalone без Patroni).
+PostgreSQL в этом контейнере ещё не установлен, поэтому `up=1`, `pg_up=0` и `pgcls_*`
+пусты — конфиг готов, метрики появятся сами, как только там поднимут БД.
+
+> ⚠️ Если после `docker compose up -d` отвалился таргет `postgres-tables`, проверьте
+> сети VictoriaMetrics: при пересоздании compose иногда подключает контейнер только к
+> одной из двух сетей. Лечится `docker compose up -d --force-recreate victoriametrics`
+> (должны быть и `monitoring_default`, и `patroni-net`).
 
 - `pg_cluster` / `node` — target-labels в `victoriametrics/scrape.yml`; роль узла —
   **метрика** `pgcls_node_is_primary`, не метка (иначе failover рвёт серии).

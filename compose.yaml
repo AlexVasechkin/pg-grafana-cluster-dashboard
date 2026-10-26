@@ -88,6 +88,18 @@ services:
       PG_EXPORTER_DISABLE_DEFAULT_METRICS: "true"
       PG_EXPORTER_DISABLE_SETTINGS_METRICS: "true"
 
+  # Отдельный standalone-подписчик (контейнер subscriber стенда Patroni,
+  # 172.20.0.50). Соглашение для серверов без Patroni: pg_cluster == node
+  # (CLUSTER-FILTERS.md §6.1). Пока в контейнере нет PostgreSQL, таргет будет
+  # down — это и есть достоверное состояние «сервер не поднят».
+  subscriber-exporter:
+    <<: *cluster-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${PG_SUB_USER:-postgres}:${PG_SUB_PASSWORD:-postgres_pass}@subscriber:5432/postgres?sslmode=disable"
+      PG_EXPORTER_EXTEND_QUERY_PATH: /etc/pg_exporter/cluster-queries.yaml
+      PG_EXPORTER_DISABLE_DEFAULT_METRICS: "true"
+      PG_EXPORTER_DISABLE_SETTINGS_METRICS: "true"
+
   victoriametrics:
     image: victoriametrics/victoria-metrics:v1.103.0
     command:
@@ -107,6 +119,7 @@ services:
       - pg1-exporter
       - pg2-exporter
       - pg3-exporter
+      - subscriber-exporter
 
   grafana:
     image: grafana/grafana:11.1.0

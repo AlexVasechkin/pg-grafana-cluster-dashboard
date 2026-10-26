@@ -35,6 +35,11 @@ scrape_configs:
         labels: { pg_cluster: pg-cluster, node: pg2, ha: patroni }
       - targets: ["pg3-exporter:9187"]
         labels: { pg_cluster: pg-cluster, node: pg3, ha: patroni }
+      # Standalone-подписчик логической репликации: pg_cluster == node
+      # (CLUSTER-FILTERS.md §6.1). Появится в фильтре «Кластер / сервер» сразу,
+      # т.к. якорь фильтров — up, а не pgcls_*: упавший узел из списка не исчезает.
+      - targets: ["subscriber-exporter:9187"]
+        labels: { pg_cluster: subscriber, node: subscriber, ha: none }
 
   # ---------------------------------------------------------------
   # 3. Patroni REST /metrics — то, чего postgres_exporter дать не может
@@ -53,7 +58,24 @@ scrape_configs:
         labels: { pg_cluster: pg-cluster, node: pg3 }
 
   # ---------------------------------------------------------------
-  # 4. etcd /metrics — здоровье DCS (кворум, смены лидера).
+  # 4. node_exporter на узлах БД — то, чего PostgreSQL по SQL не знает
+  #    (CLUSTER-METRICS.md §6): CPU, память, swap, диски, место под pg_data,
+  #    OOM-kill, состояние systemd-юнитов (patroni/postgresql).
+  #    Метки те же, что у job postgres, иначе панели не сджойнить с pgcls_*.
+  # ---------------------------------------------------------------
+  - job_name: node
+    static_configs:
+      - targets: ["pg1:9100"]
+        labels: { pg_cluster: pg-cluster, node: pg1, ha: patroni }
+      - targets: ["pg2:9100"]
+        labels: { pg_cluster: pg-cluster, node: pg2, ha: patroni }
+      - targets: ["pg3:9100"]
+        labels: { pg_cluster: pg-cluster, node: pg3, ha: patroni }
+      - targets: ["subscriber:9100"]
+        labels: { pg_cluster: subscriber, node: subscriber, ha: none }
+
+  # ---------------------------------------------------------------
+  # 5. etcd /metrics — здоровье DCS (кворум, смены лидера).
   #    Клиентский порт под mTLS (client-cert-auth: true), поэтому
   #    предъявляем client.crt/key из стенда Patroni. SAN серверных сертов
   #    содержит DNS:etcdN, поэтому targets — по именам контейнеров.

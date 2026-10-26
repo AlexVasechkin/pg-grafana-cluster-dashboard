@@ -626,7 +626,7 @@ PostgreSQL по SQL не знает ни про ОС, ни про Patroni, ни 
 |---|---|:--:|---|
 | Кто лидер **по версии Patroni/DCS**, число failover/switchover, статус member, paused-режим | 🎯 **M04** `pg.ha.primary_up`<br>🎯 **M01** `pg.cluster.leader_count` (авторитетно)<br>🎯 **M02** `pg.cluster.timeline_change` (счётчик) | К, У | **Patroni REST `/metrics`** (≥ 2.1, порт 8008): `patroni_primary`, `patroni_standby_leader`, `patroni_xlog_location`, `patroni_dcs_last_seen`, `patroni_pending_restart` |
 | Здоровье **etcd** (кворум, leader changes) | 🎯 **M03** `pg.dcs.etcd_leader` | К | `/metrics` самого etcd + `patroni_dcs_last_seen` (потеря DCS → лидер уходит в read-only, а SQL об этом не скажет) |
-| CPU, LA, RAM, swap, **свободное место под `pg_data`/`pg_wal`**, IO-latency, сеть | 🎯 **M37** `pg.io.fs_usage`<br>🎯 **M39** `pg.io.disk_latency`<br>🎯 **M41** `pg.host.mem_oom` | У | **node_exporter** — критично: «кончился диск» самая частая авария, а PG об этом не знает. OOM-kill: `node_vmstat_oom_kill` |
+| CPU, LA, RAM, swap, **свободное место под `pg_data`/`pg_wal`**, IO-latency, сеть | 🎯 **M37** `pg.io.fs_usage`<br>🎯 **M39** `pg.io.disk_latency`<br>🎯 **M41** `pg.host.mem_oom`<br>🎯 **M44** `pg.host.cpu_usage`<br>🎯 **M45** `pg.host.mem_usage` | У | **node_exporter** — ✅ **установлен на pg1/pg2/pg3 и subscriber** (job `node`, §11.6). «Кончился диск» самая частая авария, а PG об этом не знает. OOM-kill: `node_vmstat_oom_kill` |
 | Пулы, `cl_waiting`, `sv_active`, отказы пулера | 🎯 **M04** `pg.ha.primary_up` (часть «живой бэкенд на записи») | У | **pgbouncer_exporter** (`pgbouncer1` в стеке) |
 | Успешность и возраст бэкапов (pgBackRest/WAL-G) | 🎯 **M14** `pg.bkp.last_success_age` | К | их отчёты/экспортёры (`backup1`) |
 | **Успешность restore-теста** | 🎯 **M15** `pg.bkp.restore_test_age` | К | только собственный job: восстановить бэкап, прогнать проверку, выложить timestamp в textfile-collector node_exporter'а / pushgateway. Ни PG, ни pgBackRest сами это не измеряют |
@@ -702,8 +702,8 @@ PostgreSQL по SQL не знает ни про ОС, ни про Patroni, ни 
 
 ## 10. Карта требований `required_metrics.md`
 
-43 требования из [`required_metrics.md`](required_metrics.md) → метрика этого
-документа (M42 и M43 добавлены позже остальных, см. §11.5). Ключ строки — идентификатор `Mnn` из `required_metrics.md`; по нему же
+45 требований из [`required_metrics.md`](required_metrics.md) → метрика этого
+документа (M42–M45 добавлены позже остальных, см. §11.5 и §11.6). Ключ строки — идентификатор `Mnn` из `required_metrics.md`; по нему же
 ищется панель на дашборде (заголовок начинается с `[Mnn]`). Статусы:
 
 | | Значение | Шт. |
@@ -758,13 +758,15 @@ PostgreSQL по SQL не знает ни про ОС, ни про Patroni, ни 
 | **M34** | `pg.health.index_bloat` | Обслуживание / ☆ | `pgcol_index_frag_bloat_ratio` (§K) | ✅ |
 | **M35** | `pg.health.invalid_indexes` | Обслуживание / core | **`pgcol_index_is_valid`** (§K) | 🔧 |
 | **M36** | `pg.health.stale_stats` | Обслуживание / core | `pgcol_table_last_autoanalyze_ts` + **`n_mod_since_analyze`** (§K) | 🔧 |
-| **M37** | `pg.io.fs_usage` | IO / core | node_exporter (§6) | 🚫 |
+| **M37** | `pg.io.fs_usage` | IO / core | `node_filesystem_avail_bytes` / `_size_bytes` + `predict_linear` (§11.6) | 🟡 |
 | **M38** | `pg.io.checksum_fail` | IO / core | `db_checksum_failures` (§H) | 🟡 |
-| **M39** | `pg.io.disk_latency` | IO / core | node_exporter; суррогат `db_blk_read_time`, `io_*` (§H, §6) | 🚫 |
+| **M39** | `pg.io.disk_latency` | IO / core | `node_disk_*_time_seconds_total` / `_completed_total` + `io_time` (§11.6); суррогат по БД — `db_blk_read_time` (§H) | ✅ |
 | **M40** | `pg.io.growth` | IO / core | `db_size_bytes`, `cluster_size_bytes`, `tablespace_size_bytes` + `predict_linear` (§H) | ✅ |
-| **M41** | `pg.host.mem_oom` | IO / core | node_exporter `node_vmstat_oom_kill` + логи (§6) | 🚫 |
+| **M41** | `pg.host.mem_oom` | IO / core | `node_vmstat_oom_kill` (§11.6) | 🟡 |
 | **M42** | `pg.qry.qps` | Запросы / core | `pgcls_stmt_calls` (`pg_stat_statements`, выключено) + оценка по `db_xact_*` | 🔧 |
 | **M43** | `pg.wal.dir_bytes` | Кластер / core | `pgcls_wal_dir_bytes`, `pgcls_wal_dir_files` (§E) | ✅ |
+| **M44** | `pg.host.cpu_usage` | IO / core | `node_cpu_seconds_total`, `node_load1` (node_exporter, §11.6) | ✅ |
+| **M45** | `pg.host.mem_usage` | IO / core | `node_memory_*` (node_exporter, §11.6) | ✅ |
 
 Распределение по разделам требований: Кластер — 18, Обслуживание — 12, Запросы — 5,
 IO — 5, Инцидентный — 1. Приоритеты: 35 core, 3 nice-to-have
@@ -828,9 +830,14 @@ IO — 5, Инцидентный — 1. Приоритеты: 35 core, 3 nice-to
 | Файл | Что делает |
 |---|---|
 | `postgres_exporter/cluster-queries.yaml` | 17 namespace `pgcls_*` → **103 метрики**; один файл на все роли (лидер и реплики), проверен на pg1 и pg2 |
-| `victoriametrics/scrape.yml` | 4 job'а, 10 таргетов: `postgres` (pg1/pg2/pg3-exporter), `patroni` (pgN:8008), `etcd` (etcdN:2379, mTLS), `postgres-tables` (фикстура стека) |
-| `compose.yaml` | 3 экспортёра (по одному на узел) + VictoriaMetrics в сети `patroni-net` (external) |
+| `victoriametrics/scrape.yml` | 5 job'ов, 15 таргетов: `postgres` (pg1/pg2/pg3-exporter + subscriber-exporter), `patroni` (pgN:8008), **`node` (pgN:9100 + subscriber:9100)**, `etcd` (etcdN:2379, mTLS), `postgres-tables` (фикстура стека) |
+| `compose.yaml` | 4 экспортёра (3 узла Patroni + standalone-подписчик) + VictoriaMetrics в сети `patroni-net` (external) |
 | `grafana/dashboards/pg-cluster.json` | 11 секций, 67 панелей; 110 запросов отвечают данными |
+
+Standalone-подписчик добавлен по соглашению `pg_cluster == node`
+(`CLUSTER-FILTERS.md` §6.1): метки `pg_cluster: subscriber, node: subscriber, ha: none`.
+Это первый на стенде случай, когда соглашение работает вживую — в фильтре «Кластер /
+сервер» теперь два значения: `pg-cluster` и `subscriber`.
 
 Job `postgres-tables` выделен специально: якорь фильтров `up{job="postgres"}`
 (`CLUSTER-FILTERS.md` §2) должен видеть **только узлы Patroni**, иначе одиночная
@@ -882,7 +889,8 @@ SQL-строка на запрос**. Из этого три отличия от
 | WAL write/sync time, `blk_*_time` | `track_io_timing=off` | `track_io_timing: on` |
 | Подписки и origin (секция 11) | `pg_subscription` пуст (контейнер `subscriber` поднят, но подписка не создана) | создать подписку на `subscriber` |
 | Логические слоты в панели слотов | на кластере только физические слоты (pg2, pg3 на лидере + по два неактивных на репликах) | проверено временным слотом: `pg_create_logical_replication_slot('…','pgoutput', temporary => true)` даёт серию `логический, активен` с `database/plugin` в легенде и 56 байт удержанного WAL; с закрытием сессии слот исчезает сам |
-| Подписки и origins в сводке | подписок нет: контейнер `subscriber` — отдельный standalone, он не в `pg-cluster` и не скрейпится | серии показывают 0 (через `or vector(0)`), **полки лимитов рисуются всегда**: `max_logical_replication_workers = 4`, `max_replication_slots = 10` — проверено на стенде |
+| Подписки и origins в сводке | на узлах `pg-cluster` подписок нет | серии показывают 0 (через `or vector(0)`), **полки лимитов рисуются всегда**: `max_logical_replication_workers = 4`, `max_replication_slots = 10` — проверено на стенде |
+| Все `pgcls_*` у `pg_cluster="subscriber"` | контейнер `subscriber` взят под наблюдение (экспортёр + таргет), но **PostgreSQL в нём не установлен**: 0 пакетов, нет `/etc/postgresql`, `/var/lib/postgresql` пуст, на 5432 никто не слушает. Проверено: `up=1` (экспортёр отвечает, сервер виден в фильтре), `pg_up=0` (подключиться не к чему) | поднять PostgreSQL в контейнере и создать подписку на публикацию с `pg-cluster`; метрики `pgcls_sub_*` / `pgcls_origin_*` появятся сами, править конфиги не нужно |
 | Прогресс vacuum / basebackup | операции не идут | норма; заполнится при `VACUUM FREEZE` и при подъёме реплики Patroni |
 | Расхождения GUC | конфиги узлов идентичны | норма |
 | `pgcol_statement_*` для `pg-cluster` | на кластере `shared_preload_libraries` пуст — `pg_stat_statements` не загружен | добавить в Patroni-конфиг; сейчас эти метрики есть только у фикстуры стека |
@@ -900,16 +908,17 @@ SQL-строка на запрос**. Из этого три отличия от
 
 | | ID | Шт. | Комментарий |
 |:--:|---|:--:|---|
-| ✅ панель + данные | M01–M05, M07–M10, M12, M13, M16–M26, M28, M29, M38–M40, M43 | **28** | M12, M13 и M39 отдают нули: `archive_mode=off`, `track_io_timing=off` — метрики собираются, значения вырожденные |
+| ✅ панель + данные | M01–M05, M07–M10, M12, M13, M16–M26, M28, M29, M38–M40, M43, M44, M45 | **30** | M12, M13 и M39 отдают нули: `archive_mode=off`, `track_io_timing=off` — метрики собираются, значения вырожденные |
 | 🟡 панель есть, серий нет | M06, M11 | **2** | нет sync-реплики и нет подписок — см. §11.3 |
 | 🔧 нужны правки `queries.yaml` | M35, M36 | **2** | `indisvalid`, `n_mod_since_analyze` — дашборд «Обслуживание» (§3 K) |
 | ⚠️ есть у фикстуры, на кластере нужен `pg_stat_statements` | M27, M31, M32 (+ M33, M34 — per-object) | **5** | на `pg-cluster` `shared_preload_libraries` пуст |
-| 🚫 нужен другой источник | M14, M15 (бэкапы), M30 (логи/`pg_stat_monitor`), M37, M41 (node_exporter) | **5** | §6 |
+| 🚫 нужен другой источник | M14, M15 (бэкапы — textfile-коллектор node_exporter'а), M30 (логи/`pg_stat_monitor`) | **3** | §6 |
+| 🟡 метрика собирается, панели нет | M37 (место на ФС), M41 (OOM-kill) | **2** | node_exporter стоит, но в сводку просили только CPU/память/iostat — панели ждут секции «Хост» |
 | 🔧 панель есть, точного источника нет | M42 | **1** | QPS: панель в сводке работает на оценке по транзакциям, точная серия появится после включения `pg_stat_statements` |
 
-Итого 28 + 2 + 2 + 5 + 5 + 1 = 43.
+Итого 30 + 2 + 2 + 5 + 3 + 2 + 1 = 45.
 
-На дашборде `pg-cluster` присутствуют **31 идентификатор** (28 ✅ + 2 🟡 + M42); остальные
+На дашборде `pg-cluster` присутствуют **33 идентификатора** (30 ✅ + 2 🟡 + M42); остальные
 12 (M14, M15, M27, M30–M37, M41) на него намеренно не выносились — об этом написано в
 панели «Как читать дашборд».
 
@@ -953,6 +962,9 @@ SQL не знает (§6).
 | Checkpoints: timed vs requested **($node)** | M17 | тот же график, что в секции 7: `rate(pgcls_ckpt_timed)` и `rate(pgcls_ckpt_req)` узла `$node`. В сводке объясняет пилы latency рядом с TPS: всплеск «по требованию» = WAL генерится быстрее, чем рассчитан `max_wal_size`, и чекпоинтер штормит диск. Доля req в процентах и время write/sync остались в секции 7 |
 | Размер `pg_wal` по узлам | **M43** | тот же график, что в секции 4: `pgcls_wal_dir_bytes` (из `pg_ls_waldir()`) **по всем узлам**, без `$node` — слоты не реплицируются, и копить WAL может как раз не тот узел, который сейчас выбран. Индикатор «ещё не авария, но копится»: рост выше `max_wal_size + wal_keep_size` означает, что WAL кто-то держит — неактивный слот, залипший архиватор (M12/M13) или забытый prepared-xact. Свободное место под разделом остаётся за M37 (node_exporter, §6) |
 | Подписки: состояние **($node)** | M11 | `pgcls_sub_enabled` (0 = подписка выключена и молча не применяет изменения), `pgcls_sub_worker_count` и `rate()` по `apply_error_count` / `sync_error_count`. **Полка** — красная пунктирная линия `pgcls_setting_value{name="max_logical_replication_workers"}` (на стенде 4): все подписки узла делят этот пул, при упоре в него новая подписка просто не стартует. Воркеры живут только на лидере, сама подписка в каталоге видна на всех узлах |
+| CPU узла **($node)** | **M44** | node_exporter: `занято %`, `iowait %`, `system %` и `load1` на ядро (нормирован на число ядер, поэтому > 100 % = очередь, а не просто занятость). Для БД `iowait` важнее общей загрузки — это простой процессора в ожидании диска |
+| Память узла **($node)** | **M45** | `использовано` = MemTotal − MemAvailable, `page cache` (для БД это рабочий кэш поверх `shared_buffers`, а не утечка), `swap занято`; красная полка — MemTotal. OOM-kill (M41) собирается, панель — в будущей секции «Хост» |
+| Диск: iostat **($node)** | **M39** | аналог `iostat -x` по устройствам: `util` — доля времени с непустой очередью (%util), `await` — среднее время операции (`…_time_seconds_total / …_completed_total`), в миллисекундах через override по регексу. Ориентир для БД: await чтения > 20 мс при util около 100 % = диск насыщен |
 | Origins репликации и лимит **($node)** | M11 | `count(pgcls_origin_remote_lsn)` против `count(pgcls_sub_enabled)` — расхождение означает, что подписка есть, а прогресс по ней не отслеживается. **Полка** — `max_replication_slots` (на стенде 10). Обе серии через `or vector(0)`, чтобы при нуле подписок панель показывала ноль, а не пустоту, и полка всё равно рисовалась |
 | Слоты репликации: удержанный WAL **($node)** | M09 + M10 | пара к панели слева — **кто именно держит**. `pgcls_slot_retained_bytes` узла `$node`, **четыре группы серий**: физические слоты (реплики, `pg_basebackup`) и логические (подписки, CDC), каждая разделена по `pgcls_slot_active` через `and on(pg_cluster, node, slot_name)`. «**НЕАКТИВЕН**» — слот есть, но его никто не читает: копит WAL до переполнения раздела. Логические опаснее физических: они держат ещё и `catalog_xmin`, то есть тормозят vacuum каталога на всём узле; в легенде у них `database/plugin`. Пустая группа = слотов такого типа на узле нет. Кластерный срез (все узлы сразу) остался в секции 4 — там же таблица слотов с `wal_status` и `safe_wal_size` |
 
@@ -980,3 +992,69 @@ req в процентах и время checkpoint'ов остаются в пр
 
 Требование **M42** (`pg.qry.qps`) заведено в `required_metrics.md` первым свободным
 номером: QPS в исходной постановке не было, а правило там — номера не переиспользовать.
+
+### 11.6. node_exporter на узлах БД
+
+Поставлен и настроен на **pg1, pg2, pg3 и subscriber** — `prometheus-node-exporter
+1.7.0-1ubuntu0.3` из репозитория Ubuntu 24.04, systemd-юнит из пакета, слушает `:9100`.
+Это закрывает требования, у которых раньше не было источника: **M37, M39, M41** и новые
+**M44, M45**.
+
+Конфигурация — `/etc/default/prometheus-node-exporter` (одинаковая на всех узлах):
+
+```ini
+ARGS="--collector.textfile.directory=/var/lib/prometheus/node-exporter \
+      --collector.systemd \
+      --collector.systemd.unit-include=(patroni|postgresql|etcd|pgbouncer).service \
+      --no-collector.arp --no-collector.netclass --no-collector.mdadm \
+      --no-collector.nfs --no-collector.nfsd --no-collector.zfs \
+      --collector.diskstats.device-exclude=^(ram|loop|fd|nbd|(h|s|v|xv)d[a-z]|nvme[0-9]+n[0-9]+p)[0-9]+$ \
+      --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|…|tracefs)$"
+```
+
+Почему именно так:
+
+| Флаг | Зачем |
+|---|---|
+| `--collector.systemd` + `unit-include` | даёт `node_systemd_unit_state{name="patroni.service", state="active"}` — «Patroni упал как сервис» без разбора логов. Проверено: на pg1 возвращает 1. **Без фильтра** коллектор отдаёт сотни серий на хост |
+| `--collector.textfile.directory` | под метрики из скриптов: возраст бэкапа и restore-теста (**M14/M15**) — единственный способ их получить, см. §6 |
+| `diskstats.device-exclude` с `nbd` | на стенде Docker Desktop в `/proc/diskstats` висят 16 устройств `nbd0…nbd15` с нулями. После фильтра остаётся `vda` — реальный диск |
+| `filesystem.fs-types-exclude` | убирает overlay/tmpfs/cgroup: иначе «заполнение ФС» считается по псевдо-файловым системам |
+| без `\d` в регексах | значение `ARGS` читает systemd через `EnvironmentFile`, и обратный слэш там обрабатывается как escape — регексы написаны через `[0-9]`, чтобы не зависеть от этого |
+
+Скрейп — job `node` в `victoriametrics/scrape.yml`, метки **те же**, что у job `postgres`
+(`pg_cluster`, `node`, `ha`): иначе хостовые панели нельзя сджойнить с ролью узла
+(`and on(pg_cluster, node) (pgcls_node_is_primary == 1)`). Конфиг применён через
+`POST /-/reload` — без пересоздания контейнера VictoriaMetrics (и, кстати, без риска
+потерять сеть, см. предупреждение в `PLAN.md`).
+
+Снято с живого pg1 после установки:
+
+| Метрика | Значение |
+|---|---|
+| CPU занято / iowait | 6.0 % / ~0 % |
+| `load1` на ядро | 7.4 % |
+| Память использовано / всего | 2.1 ГБ / 8.2 ГБ (page cache 2.1 ГБ) |
+| `vda` util / await записи | 0.49 % / 2.36 мс |
+| ФС `/var/lib/postgresql` | занято 68.9 % |
+| `node_systemd_unit_state{patroni.service, active}` | 1 |
+| `node_vmstat_oom_kill` | 0 |
+
+> ⚠️ **Цифры CPU и памяти на этом стенде недостоверны по узлам.** Проверено: внутри
+> контейнера `/proc` отдаёт ресурсы всей VM Docker (5 ядер, 7.7 ГБ), cgroup-лимитов в
+> compose стенда нет, диск `vda` у всех узлов общий. Значит у pg1/pg2/pg3 эти метрики
+> будут почти одинаковыми, а «потребление узла» в контейнере честно показывает только
+> cAdvisor. **На ВМ в проде** (а у вас прод — ВМ) всё как надо: своё `/proc`, свои диски,
+> отдельные разделы под `pg_data` и `pg_wal`.
+
+Что осталось по этому источнику:
+
+1. секция «Хост узла `$node`» с местом на ФС (**M37**, `predict_linear` на исчерпание),
+   OOM (**M41**), сетью (к **M16**: WAL генерится быстрее, чем влезает в канал) и
+   состоянием systemd-юнитов;
+2. textfile-коллектор для бэкапов (**M14/M15**): обёртка над `pgbackrest info
+   --output=json` → `.prom`-файл, писать через временный файл и `mv`;
+3. для прода — роль `node_exporter` в их ansible-проекте (структура как у ролей
+   `pgbouncer`/`pgbackrest`: `tasks/{main,install,configure,service,verify}.yml`) и
+   `--web.listen-address` на внутренний интерфейс: **у node_exporter нет аутентификации
+   по умолчанию**, `/metrics` отдаёт немало информации о хосте.
