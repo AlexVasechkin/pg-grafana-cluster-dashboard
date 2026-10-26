@@ -389,6 +389,7 @@ pgcls_setting:
       'autovacuum_max_workers', 'autovacuum_freeze_max_age',
       'autovacuum_multixact_freeze_max_age', 'autovacuum_vacuum_cost_limit',
       'max_replication_slots', 'max_wal_senders', 'max_worker_processes',
+      'max_logical_replication_workers', 'max_sync_workers_per_subscription',
       'statement_timeout', 'idle_in_transaction_session_timeout',
       'archive_mode', 'archive_timeout', 'hot_standby_feedback',
       'synchronous_commit', 'synchronous_standby_names', 'track_io_timing',
