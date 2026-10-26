@@ -97,7 +97,7 @@
     {
       "type": "row",
       "id": 1,
-      "title": "0. Сводка — нагрузка кластера $pg_cluster  ·  M26, M28, M42",
+      "title": "0. Сводка — нагрузка кластера $pg_cluster  ·  M24, M26, M28, M42",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -196,12 +196,12 @@
     {
       "type": "timeseries",
       "id": 3,
-      "title": "[M26] Блокировки без granted",
+      "title": "[M24] Соединения по типам и БД ($node)",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
       },
-      "description": "Тот же график, что в секции «5. Предаварийное»: pg_locks WHERE NOT granted по узлам. Больше нуля дольше нескольких секунд = цепочка блокировок, запросы стоят в очереди.",
+      "description": "count(*) из pg_stat_activity **узла $node** — соединения живут на узле, а не в кластере: у лидера это нагрузка приложений, у реплики — читатели и walreceiver. Первая группа серий — соединения приложений (`backend_type='client backend'`) в разрезе БД · состояние: именно они занимают слоты `max_connections`, а растущий `idle in transaction` держит xmin и создаёт блокировки. Вторая — служебные процессы этого узла (walsender, walreceiver, autovacuum worker, checkpointer): у них нет ни БД, ни состояния, а walsender'ы расходуют `max_wal_senders`, а не `max_connections`. Узел переключается фильтром «Узел» сверху или кликом по строке в таблице «Узлы кластера» (секция 1). Процент насыщения слотов по всем узлам сразу — панель «Соединения, % от max_connections» в секции 6.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -214,9 +214,18 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "pgcls_sess_locks_not_granted{pg_cluster=\"$pg_cluster\"}",
+          "expr": "sum by (db_name, state) (pgcls_conn_count{pg_cluster=\"$pg_cluster\", node=\"$node\", backend_type=\"client backend\", db_name=~\"$db_name\"})",
           "refId": "A",
-          "legendFormat": "{{node}}"
+          "legendFormat": "{{db_name}} · {{state}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (backend_type) (pgcls_conn_count{pg_cluster=\"$pg_cluster\", node=\"$node\", backend_type!=\"client backend\"})",
+          "refId": "B",
+          "legendFormat": "служебные: {{backend_type}}"
         }
       ],
       "fieldConfig": {

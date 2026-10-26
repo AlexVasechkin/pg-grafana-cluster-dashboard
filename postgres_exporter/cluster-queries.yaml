@@ -265,6 +265,26 @@ pgcls_sess:
     - oldest_prepared_xact_seconds: {usage: "GAUGE", description: "[M23 pg.sess.xmin_horizon]"}
   cache_seconds: 0
 
+# --- F3. Соединения по типам и БД (У+ db_name, backend_type, state) ------
+# Разрез pgcls_sess_conn_used_pct: КТО занимает слоты подключений.
+# Кардинальность: db × backend_type × state × узлы. На стенде ~10 серий на узел;
+# в проде с десятком БД считать: ~(БД × 5 состояний) + ~7 служебных процессов.
+# У фоновых процессов (checkpointer, walsender, …) datname и state пустые — это норма.
+pgcls_conn:
+  query: |
+    SELECT COALESCE(a.datname, '') AS db_name,
+           a.backend_type,
+           COALESCE(a.state, '')   AS state,
+           count(*)                AS count
+    FROM pg_stat_activity a
+    GROUP BY 1, 2, 3
+  metrics:
+    - db_name: {usage: "LABEL", description: "БД подключения; пусто у фоновых процессов"}
+    - backend_type: {usage: "LABEL", description: "client backend / walsender / autovacuum worker / …"}
+    - state: {usage: "LABEL", description: "active / idle / idle in transaction / …; пусто у фоновых процессов"}
+    - count: {usage: "GAUGE", description: "Число соединений этого типа [M24 pg.sess.conn_pct]"}
+  cache_seconds: 0
+
 # --- F2. Блокировки по типам (У+ mode, granted) --------------------------
 # Разрез суммарного pgcls_sess_locks_not_granted: какой именно режим блокировки
 # и сколько их ждёт/держится. Кардинальность: ~8 режимов × granted(2) × узлы.
