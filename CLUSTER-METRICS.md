@@ -832,7 +832,7 @@ IO — 5, Инцидентный — 1. Приоритеты: 35 core, 3 nice-to
 | `postgres_exporter/cluster-queries.yaml` | 17 namespace `pgcls_*` → **103 метрики**; один файл на все роли (лидер и реплики), проверен на pg1 и pg2 |
 | `victoriametrics/scrape.yml` | 5 job'ов, 15 таргетов: `postgres` (pg1/pg2/pg3-exporter + subscriber-exporter), `patroni` (pgN:8008), **`node` (pgN:9100 + subscriber:9100)**, `etcd` (etcdN:2379, mTLS), `postgres-tables` (фикстура стека) |
 | `compose.yaml` | 4 экспортёра (3 узла Patroni + standalone-подписчик) + VictoriaMetrics в сети `patroni-net` (external) |
-| `grafana/dashboards/pg-cluster.json` | 11 секций, 67 панелей; 110 запросов отвечают данными |
+| `grafana/dashboards/pg-cluster.json` | 12 секций (с «0. Сводка»), 78 панелей; 136 запросов отвечают данными. Источник данных параметризован переменной `$ds` (`CLUSTER-FILTERS.md` §5.1) — uid нигде не прошит |
 
 Standalone-подписчик добавлен по соглашению `pg_cluster == node`
 (`CLUSTER-FILTERS.md` §6.1): метки `pg_cluster: subscriber, node: subscriber, ha: none`.

@@ -20,12 +20,31 @@
   "templating": {
     "list": [
       {
+        "name": "ds",
+        "label": "Источник данных",
+        "type": "datasource",
+        "query": "prometheus",
+        "regex": "",
+        "refresh": 1,
+        "hide": 0,
+        "multi": false,
+        "includeAll": false,
+        "skipUrlSync": false,
+        "description": "Любой Prometheus-совместимый источник. Все панели и переменные ходят через ${ds}, uid нигде не прошит.",
+        "current": {
+          "selected": false,
+          "text": "VictoriaMetrics",
+          "value": "victoriametrics"
+        },
+        "options": []
+      },
+      {
         "name": "pg_cluster",
         "label": "Кластер",
         "type": "query",
         "datasource": {
           "type": "prometheus",
-          "uid": "victoriametrics"
+          "uid": "${ds}"
         },
         "query": "label_values(pgcol_db_size_bytes, pg_cluster)",
         "refresh": 1,
@@ -39,7 +58,7 @@
         "type": "query",
         "datasource": {
           "type": "prometheus",
-          "uid": "victoriametrics"
+          "uid": "${ds}"
         },
         "query": "label_values(pgcol_db_size_bytes{pg_cluster=\"$pg_cluster\"}, db_name)",
         "refresh": 2,
@@ -53,7 +72,7 @@
         "type": "query",
         "datasource": {
           "type": "prometheus",
-          "uid": "victoriametrics"
+          "uid": "${ds}"
         },
         "query": "label_values(pgcol_table_total_bytes{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"}, table)",
         "refresh": 2,
@@ -92,7 +111,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -104,7 +123,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "pgcol_db_size_bytes{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"}",
           "refId": "A"
@@ -123,7 +142,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -135,7 +154,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "pgcol_db_numbackends{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"}",
           "refId": "A"
@@ -154,7 +173,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -185,7 +204,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "pgcol_db_cache_hit_ratio{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"}",
           "refId": "A"
@@ -204,7 +223,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -216,7 +235,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "rate(pgcol_db_deadlocks{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"}[5m])",
           "refId": "A"
@@ -235,13 +254,13 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "sum by (table) (topk(20, pgcol_table_total_bytes{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"}))",
           "format": "table",
@@ -251,7 +270,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "1000 * sum by (table) (pgcol_table_last_autovacuum_ts{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"})",
           "format": "table",
@@ -261,7 +280,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "1000 * sum by (table) (pgcol_table_last_vacuum_ts{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"})",
           "format": "table",
@@ -271,7 +290,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "1000 * sum by (table) (pgcol_table_last_autoanalyze_ts{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"})",
           "format": "table",
@@ -281,7 +300,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "1000 * sum by (table) (pgcol_table_last_analyze_ts{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"})",
           "format": "table",
@@ -471,7 +490,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -506,7 +525,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "(pgcol_table_total_bytes{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", is_partition=\"false\"} > 0) or label_replace(sum by (schema, parent) (pgcol_partition_size_bytes{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"}), \"table\", \"$1\", \"parent\", \"(.+)\")",
           "legendFormat": "{{schema}}.{{table}}",
@@ -527,13 +546,13 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "sum by (schema, parent, partition, bounds) (pgcol_partition_size_bytes{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", parent=~\"^$table$\"})",
           "format": "table",
@@ -604,7 +623,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -616,7 +635,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "rate(pgcol_db_xact_commit{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"}[5m])",
           "legendFormat": "commit",
@@ -625,7 +644,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "rate(pgcol_db_xact_rollback{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"}[5m])",
           "legendFormat": "rollback",
@@ -645,7 +664,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -657,7 +676,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "rate(pgcol_db_temp_bytes{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"}[5m])",
           "legendFormat": "temp bytes",
@@ -688,7 +707,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -722,7 +741,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "topk(20, pgcol_table_dead_ratio{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"})",
           "legendFormat": "{{table}}",
@@ -743,7 +762,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -777,7 +796,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "topk(20, pgcol_table_bloat_ratio{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"})",
           "legendFormat": "{{table}}",
@@ -809,7 +828,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -821,7 +840,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "pgcol_table_total_bytes{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=\"$table\"}",
           "legendFormat": "total",
@@ -830,7 +849,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "pgcol_table_heap_bytes{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=\"$table\"}",
           "legendFormat": "heap",
@@ -839,7 +858,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "pgcol_table_index_bytes{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=\"$table\"}",
           "legendFormat": "index",
@@ -848,7 +867,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "pgcol_table_toast_bytes{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=\"$table\"}",
           "legendFormat": "toast",
@@ -868,7 +887,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -880,7 +899,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "pgcol_table_n_live_tup{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=\"$table\"}",
           "legendFormat": "live",
@@ -889,7 +908,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "pgcol_table_n_dead_tup{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=\"$table\"}",
           "legendFormat": "dead",
@@ -909,7 +928,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -921,7 +940,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "time() - pgcol_table_last_autovacuum_ts{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=\"$table\"}",
           "refId": "A"
@@ -940,7 +959,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -952,7 +971,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "time() - pgcol_table_last_autoanalyze_ts{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=\"$table\"}",
           "refId": "A"
@@ -971,7 +990,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -983,7 +1002,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "rate(pgcol_table_seq_scan{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=~\"^$table$\"}[5m])",
           "legendFormat": "seq scan",
@@ -992,7 +1011,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "rate(pgcol_table_idx_scan{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=~\"^$table$\"}[5m])",
           "legendFormat": "idx scan",
@@ -1012,7 +1031,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -1024,7 +1043,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "rate(pgcol_table_n_tup_ins{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=~\"^$table$\"}[5m])",
           "legendFormat": "insert",
@@ -1033,7 +1052,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "rate(pgcol_table_n_tup_upd{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=~\"^$table$\"}[5m])",
           "legendFormat": "update",
@@ -1042,7 +1061,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "rate(pgcol_table_n_tup_del{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=~\"^$table$\"}[5m])",
           "legendFormat": "delete",
@@ -1051,7 +1070,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "rate(pgcol_table_n_tup_hot_upd{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=~\"^$table$\"}[5m])",
           "legendFormat": "hot update",
@@ -1082,7 +1101,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -1103,7 +1122,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "sum by (index) (topk(20, pgcol_index_size_bytes{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=~\"^$table$\"}))",
           "format": "table",
@@ -1160,7 +1179,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -1172,7 +1191,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "rate(pgcol_index_idx_scan{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=~\"^$table$\"}[5m])",
           "legendFormat": "{{index}}",
@@ -1192,7 +1211,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "fieldConfig": {
         "defaults": {
@@ -1204,7 +1223,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "expr": "time() - pgcol_table_last_analyze_ts{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", table=\"$table\"}",
           "refId": "A"
@@ -1234,13 +1253,13 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "refId": "A",
           "format": "table",
@@ -1250,7 +1269,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "refId": "B",
           "format": "table",
@@ -1260,7 +1279,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "refId": "C",
           "format": "table",
@@ -1363,13 +1382,13 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "refId": "A",
           "format": "table",
@@ -1379,7 +1398,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "refId": "B",
           "format": "table",
@@ -1389,7 +1408,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "refId": "C",
           "format": "table",
@@ -1492,13 +1511,13 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "refId": "A",
           "format": "table",
@@ -1508,7 +1527,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "refId": "B",
           "format": "table",
@@ -1518,7 +1537,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "refId": "C",
           "format": "table",
@@ -1621,13 +1640,13 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "refId": "A",
           "format": "table",
@@ -1637,7 +1656,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "refId": "B",
           "format": "table",
@@ -1647,7 +1666,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "refId": "C",
           "format": "table",
@@ -1750,13 +1769,13 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "victoriametrics"
+        "uid": "${ds}"
       },
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "victoriametrics"
+            "uid": "${ds}"
           },
           "refId": "A",
           "format": "table",

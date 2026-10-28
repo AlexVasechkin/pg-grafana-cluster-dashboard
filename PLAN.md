@@ -65,7 +65,9 @@ grafana :3000 (provisioning: datasource + дашборд)
 Здесь живут M21, M27, M28, M32, M33, M34, M36, M40; требования уровня кластера — на
 дашборде «Состояние кластера».
 
-Переменные: `$pg_cluster`, `$db_name`, `$table` (label_values, каскадно).
+Переменные: `$ds` (источник данных, тип `datasource`), `$pg_cluster`, `$db_name`,
+`$table` (label_values, каскадно). Uid источника в JSON не прошит — оба дашборда ходят
+через `${ds}`, см. `CLUSTER-FILTERS.md` §5.1.
 Секции:
 1. **Обзор БД** — размер, соединения, cache hit, deadlocks; **таблица «Топ самых
    больших таблиц: вакуум/анализ»** (table + last autovacuum/vacuum/autoanalyze/analyze,
