@@ -1,0 +1,1479 @@
+{
+  "uid": "pg-users",
+  "title": "PostgreSQL — пользователи",
+  "description": "Срок действия паролей (VALID UNTIL), членство в ролях, superuser и NOLOGIN. Требования M46–M51 — USER-METRICS.md, метрики — postgres_exporter/user-queries.yaml.",
+  "tags": [
+    "postgresql",
+    "users",
+    "security"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5m",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "graphTooltip": 0,
+  "links": [
+    {
+      "title": "Другие дашборды PostgreSQL",
+      "type": "dashboards",
+      "tags": [
+        "postgresql"
+      ],
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "tooltip": "",
+      "url": ""
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "ds",
+        "label": "Источник данных",
+        "type": "datasource",
+        "query": "prometheus",
+        "regex": "",
+        "refresh": 1,
+        "hide": 0,
+        "multi": false,
+        "includeAll": false,
+        "skipUrlSync": false,
+        "description": "Любой Prometheus-совместимый источник. Все панели и переменные ходят через ${ds}, uid нигде не прошит.",
+        "current": {
+          "selected": false,
+          "text": "VictoriaMetrics",
+          "value": "victoriametrics"
+        },
+        "options": []
+      },
+      {
+        "name": "pg_cluster",
+        "label": "Кластер / сервер",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${ds}"
+        },
+        "definition": "label_values(up{job=\"postgres\"}, pg_cluster)",
+        "query": "label_values(up{job=\"postgres\"}, pg_cluster)",
+        "regex": "",
+        "refresh": 2,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "hide": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "db_name",
+        "label": "База",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${ds}"
+        },
+        "definition": "label_values(pgcls_db_size_bytes{pg_cluster=\"$pg_cluster\"}, db_name)",
+        "query": "label_values(pgcls_db_size_bytes{pg_cluster=\"$pg_cluster\"}, db_name)",
+        "regex": "",
+        "refresh": 2,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "hide": 0,
+        "current": {
+          "selected": false,
+          "text": "postgres",
+          "value": "postgres"
+        },
+        "options": []
+      },
+      {
+        "name": "schema",
+        "label": "Схема",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${ds}"
+        },
+        "definition": "label_values(pgcls_schema_info{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"}, schema)",
+        "query": "label_values(pgcls_schema_info{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"}, schema)",
+        "regex": "",
+        "refresh": 2,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "hide": 0,
+        "current": {
+          "selected": false,
+          "text": "public",
+          "value": "public"
+        },
+        "options": []
+      },
+      {
+        "name": "rolname",
+        "label": "Пользователь",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${ds}"
+        },
+        "definition": "query_result(max by (rolname) (pgcls_role_info{pg_cluster=\"$pg_cluster\", rolcanlogin=\"true\"}) or label_replace(vector(0), \"rolname\", \"(не выбран)\", \"\", \"\"))",
+        "query": "query_result(max by (rolname) (pgcls_role_info{pg_cluster=\"$pg_cluster\", rolcanlogin=\"true\"}) or label_replace(vector(0), \"rolname\", \"(не выбран)\", \"\", \"\"))",
+        "regex": "/rolname=\"([^\"]+)\"/",
+        "refresh": 2,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "hide": 0,
+        "current": {
+          "selected": false,
+          "text": "(не выбран)",
+          "value": "(не выбран)"
+        },
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "id": 1,
+      "title": "Сбор данных о ролях с лидера $pg_cluster",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      },
+      "description": "1 = экспортёр пользователей (job postgres-users) на лидере отвечает. 0 = лидера нет или его экспортёр недоступен: пустые таблицы ниже тогда НЕ означают «всё хорошо».",
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "refId": "A",
+          "instant": true,
+          "expr": "count(up{job=\"postgres-users\", pg_cluster=\"$pg_cluster\"} == 1 and on(pg_cluster, node) (pgcls_node_is_primary == 1)) or vector(0)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "НЕТ ДАННЫХ С ЛИДЕРА — пустые таблицы ниже не означают «всё хорошо»",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "Сбор работает",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "type": "row",
+      "id": 2,
+      "title": "1. Срок действия пароля (VALID UNTIL) — БД $db_name  ·  M46, M47, M48",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      },
+      "panels": []
+    },
+    {
+      "type": "table",
+      "id": 3,
+      "title": "[M46] Срок действия истёк",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      },
+      "description": "Роли, у которых `rolvaliduntil` уже в прошлом: вход по паролю для них отклоняется. Недавно истёкшие — сверху. Бессрочные роли (NULL / infinity) сюда не попадают. Список сужен фильтром БД: только роли с CONNECT на $db_name. Фильтр схемы не влияет.",
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "max by (rolname, rolcanlogin, rolsuper) (1000 * pgcls_role_valid_until_seconds{pg_cluster=\"$pg_cluster\"} * on(pg_cluster, node, rolname) group_left(rolcanlogin, rolsuper) pgcls_role_info{pg_cluster=\"$pg_cluster\"} and on(pg_cluster, node, rolname) (pgcls_role_valid_until_seconds{pg_cluster=\"$pg_cluster\"} < time()) and on(pg_cluster, node) (pgcls_node_is_primary == 1) and on(pg_cluster, node, rolname) pgcls_role_db_access{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"})",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "max by (rolname) ((time() - pgcls_role_valid_until_seconds{pg_cluster=\"$pg_cluster\"} > 0) and on(pg_cluster, node) (pgcls_node_is_primary == 1) and on(pg_cluster, node, rolname) pgcls_role_db_access{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"})",
+          "refId": "B",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "rolname",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "rolname": "Пользователь",
+              "Value #A": "VALID UNTIL",
+              "Value #B": "Просрочено",
+              "rolcanlogin": "LOGIN",
+              "rolsuper": "Superuser"
+            },
+            "excludeByName": {},
+            "indexByName": {
+              "rolname": 0,
+              "Value #A": 1,
+              "Value #B": 2,
+              "rolcanlogin": 3,
+              "rolsuper": 4
+            }
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "Пользователь",
+                "VALID UNTIL",
+                "Просрочено",
+                "LOGIN",
+                "Superuser"
+              ]
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "noValue": "Нет таких пользователей"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Пользователь"
+            },
+            "properties": [
+              {
+                "id": "custom.minWidth",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "VALID UNTIL"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "time:YYYY-MM-DD HH:mm"
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Просрочено"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dtdurations"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "LOGIN"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "да",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "нет",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 62
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Superuser"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "да",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "нет",
+                        "color": "text",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "VALID UNTIL",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 4,
+      "title": "[M47] Истекает менее чем через 3 суток",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      },
+      "description": "Осталось от 0 до 72 ч (`VALID UNTIL − time()`). Ближайшие — сверху. Список сужен фильтром БД (CONNECT на $db_name), фильтр схемы не влияет.",
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "max by (rolname, rolcanlogin, rolsuper) (1000 * pgcls_role_valid_until_seconds{pg_cluster=\"$pg_cluster\"} * on(pg_cluster, node, rolname) group_left(rolcanlogin, rolsuper) pgcls_role_info{pg_cluster=\"$pg_cluster\"} and on(pg_cluster, node, rolname) (pgcls_role_valid_until_seconds{pg_cluster=\"$pg_cluster\"} - time() >= 0 < 259200) and on(pg_cluster, node) (pgcls_node_is_primary == 1) and on(pg_cluster, node, rolname) pgcls_role_db_access{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"})",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "max by (rolname) ((pgcls_role_valid_until_seconds{pg_cluster=\"$pg_cluster\"} - time() >= 0 < 259200) and on(pg_cluster, node) (pgcls_node_is_primary == 1) and on(pg_cluster, node, rolname) pgcls_role_db_access{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"})",
+          "refId": "B",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "rolname",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "rolname": "Пользователь",
+              "Value #A": "VALID UNTIL",
+              "Value #B": "Осталось",
+              "rolcanlogin": "LOGIN",
+              "rolsuper": "Superuser"
+            },
+            "excludeByName": {},
+            "indexByName": {
+              "rolname": 0,
+              "Value #A": 1,
+              "Value #B": 2,
+              "rolcanlogin": 3,
+              "rolsuper": 4
+            }
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "Пользователь",
+                "VALID UNTIL",
+                "Осталось",
+                "LOGIN",
+                "Superuser"
+              ]
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "noValue": "Нет таких пользователей"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Пользователь"
+            },
+            "properties": [
+              {
+                "id": "custom.minWidth",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "VALID UNTIL"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "time:YYYY-MM-DD HH:mm"
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Осталось"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dtdurations"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "LOGIN"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "да",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "нет",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 62
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Superuser"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "да",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "нет",
+                        "color": "text",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "VALID UNTIL",
+            "desc": false
+          }
+        ],
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 5,
+      "title": "[M48] Истекает менее чем через 7 дней",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      },
+      "description": "Осталось от 0 до 7 суток, строки M47 включены и подсвечены оранжевым (< 72 ч), остальные — жёлтым. Список сужен фильтром БД (CONNECT на $db_name), фильтр схемы не влияет.",
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "max by (rolname, rolcanlogin, rolsuper) (1000 * pgcls_role_valid_until_seconds{pg_cluster=\"$pg_cluster\"} * on(pg_cluster, node, rolname) group_left(rolcanlogin, rolsuper) pgcls_role_info{pg_cluster=\"$pg_cluster\"} and on(pg_cluster, node, rolname) (pgcls_role_valid_until_seconds{pg_cluster=\"$pg_cluster\"} - time() >= 0 < 604800) and on(pg_cluster, node) (pgcls_node_is_primary == 1) and on(pg_cluster, node, rolname) pgcls_role_db_access{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"})",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "max by (rolname) ((pgcls_role_valid_until_seconds{pg_cluster=\"$pg_cluster\"} - time() >= 0 < 604800) and on(pg_cluster, node) (pgcls_node_is_primary == 1) and on(pg_cluster, node, rolname) pgcls_role_db_access{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"})",
+          "refId": "B",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "rolname",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "rolname": "Пользователь",
+              "Value #A": "VALID UNTIL",
+              "Value #B": "Осталось",
+              "rolcanlogin": "LOGIN",
+              "rolsuper": "Superuser"
+            },
+            "excludeByName": {},
+            "indexByName": {
+              "rolname": 0,
+              "Value #A": 1,
+              "Value #B": 2,
+              "rolcanlogin": 3,
+              "rolsuper": 4
+            }
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "Пользователь",
+                "VALID UNTIL",
+                "Осталось",
+                "LOGIN",
+                "Superuser"
+              ]
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "noValue": "Нет таких пользователей"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Пользователь"
+            },
+            "properties": [
+              {
+                "id": "custom.minWidth",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "VALID UNTIL"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "time:YYYY-MM-DD HH:mm"
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Осталось"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dtdurations"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "orange",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 259200
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "LOGIN"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "да",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "нет",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 62
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Superuser"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "да",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "нет",
+                        "color": "text",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "VALID UNTIL",
+            "desc": false
+          }
+        ],
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      }
+    },
+    {
+      "type": "row",
+      "id": 6,
+      "title": "2. Членство пользователя $rolname в ролях  ·  M49",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "panels": []
+    },
+    {
+      "type": "table",
+      "id": 7,
+      "title": "[M49] Роли пользователя $rolname",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      },
+      "description": "Роли, в которые входит пользователь из фильтра «Пользователь»: прямо или через другие роли (рекурсивно по `pg_auth_members`). «Уровень» 1 = прямое членство. INHERIT = права роли наследуются по всей цепочке; ADMIN OPTION — на последнем звене. Встроенные роли pg_* (pg_read_all_data и т. п.) показываются. Фильтры БД и схемы на эту панель не влияют.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "max by (role, membership, inherit, admin, role_super) (pgcls_role_membership_depth{pg_cluster=\"$pg_cluster\", rolname=\"$rolname\"} and on(pg_cluster, node) (pgcls_node_is_primary == 1))",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "role": "Роль",
+              "membership": "Членство",
+              "Value": "Уровень",
+              "inherit": "INHERIT",
+              "admin": "ADMIN OPTION",
+              "role_super": "Superuser у роли"
+            },
+            "excludeByName": {},
+            "indexByName": {
+              "role": 0,
+              "membership": 1,
+              "Value": 2,
+              "inherit": 3,
+              "admin": 4,
+              "role_super": 5
+            }
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "Роль",
+                "Членство",
+                "Уровень",
+                "INHERIT",
+                "ADMIN OPTION",
+                "Superuser у роли"
+              ]
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "noValue": "Выберите пользователя в фильтре «Пользователь» (или он не входит ни в одну роль)"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "INHERIT"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "да",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "нет",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ADMIN OPTION"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "да",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "нет",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Superuser у роли"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "да",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "нет",
+                        "color": "text",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Уровень",
+            "desc": false
+          }
+        ],
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      }
+    },
+    {
+      "type": "row",
+      "id": 8,
+      "title": "3. Привилегированные и неактивные роли  ·  M50, M51",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "panels": []
+    },
+    {
+      "type": "table",
+      "id": 9,
+      "title": "[M50] Superuser",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      },
+      "description": "Все роли с `rolsuper = true` на кластере $pg_cluster. Фильтрами БД и схемы не сужается: у superuser доступ есть везде. Пустой VALID UNTIL = бессрочно.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "max by (rolname, rolcanlogin) (pgcls_role_info{pg_cluster=\"$pg_cluster\", rolsuper=\"true\"} and on(pg_cluster, node) (pgcls_node_is_primary == 1))",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "max by (rolname) (((1000 * pgcls_role_valid_until_seconds{pg_cluster=\"$pg_cluster\"} and on(pg_cluster, node, rolname) pgcls_role_info{pg_cluster=\"$pg_cluster\", rolsuper=\"true\"}) or on(pg_cluster, node, rolname) (0 * pgcls_role_info{pg_cluster=\"$pg_cluster\", rolsuper=\"true\"})) and on(pg_cluster, node) (pgcls_node_is_primary == 1))",
+          "refId": "B",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "rolname",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "rolname": "Роль",
+              "rolcanlogin": "LOGIN",
+              "Value #B": "VALID UNTIL"
+            },
+            "excludeByName": {},
+            "indexByName": {
+              "rolname": 0,
+              "rolcanlogin": 1,
+              "Value #B": 2
+            }
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "Роль",
+                "LOGIN",
+                "VALID UNTIL"
+              ]
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "noValue": "Нет ролей superuser"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "LOGIN"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "да",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "нет",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "VALID UNTIL"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "time:YYYY-MM-DD HH:mm"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "бессрочно",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Роль",
+            "desc": false
+          }
+        ],
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 10,
+      "title": "[M51] NOLOGIN",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      },
+      "description": "Роли с `rolcanlogin = false` — обычно групповые роли. «Членов» = прямых участников роли; 0 (серым) = роль-сирота, кандидат на удаление. Встроенные роли pg_* исключены. Список сужен фильтрами БД и схемы по праву доступа.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "max by (rolname, rolsuper) (pgcls_role_members_count{pg_cluster=\"$pg_cluster\"} * on(pg_cluster, node, rolname) group_left(rolsuper) pgcls_role_info{pg_cluster=\"$pg_cluster\", rolcanlogin=\"false\"} and on(pg_cluster, node) (pgcls_node_is_primary == 1) and on(pg_cluster, node, rolname) pgcls_role_db_access{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\"} and on(pg_cluster, node, rolname) pgcls_role_schema_access{pg_cluster=\"$pg_cluster\", db_name=\"$db_name\", schema=\"$schema\"})",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "rolname": "Роль",
+              "Value": "Членов в роли",
+              "rolsuper": "Superuser"
+            },
+            "excludeByName": {},
+            "indexByName": {
+              "rolname": 0,
+              "Value": 1,
+              "rolsuper": 2
+            }
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "Роль",
+                "Членов в роли",
+                "Superuser"
+              ]
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "noValue": "Нет ролей NOLOGIN"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Членов в роли"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#808080",
+                      "value": null
+                    },
+                    {
+                      "color": "text",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Superuser"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "да",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "нет",
+                        "color": "text",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Роль",
+            "desc": false
+          }
+        ],
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      }
+    }
+  ]
+}

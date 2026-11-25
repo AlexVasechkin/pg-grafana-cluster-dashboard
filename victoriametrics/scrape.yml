@@ -42,6 +42,18 @@ scrape_configs:
         labels: { pg_cluster: subscriber, node: subscriber, ha: none }
 
   # ---------------------------------------------------------------
+  # 2a. Роли и пользователи (user-queries.yaml): pgcls_role*, pgcls_schema*.
+  #     Метки те же, что у job postgres: дашборд «Пользователи» берёт строки
+  #     лидера через and on(pg_cluster, node) (pgcls_node_is_primary == 1).
+  # ---------------------------------------------------------------
+  - job_name: postgres-users
+    static_configs:
+      - targets: ["pg1-users-exporter:9187"]
+        labels: { pg_cluster: pg-cluster, node: pg1, ha: patroni }
+      - targets: ["subscriber-users-exporter:9187"]
+        labels: { pg_cluster: subscriber, node: subscriber, ha: none }
+
+  # ---------------------------------------------------------------
   # 3. Patroni REST /metrics — то, чего postgres_exporter дать не может
   #    (CLUSTER-METRICS.md §6): кто лидер по версии DCS, timeline,
   #    pending_restart, paused, dcs_last_seen.

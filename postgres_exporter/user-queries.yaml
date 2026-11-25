@@ -1,0 +1,184 @@
+# Метрики пользователей и ролей PostgreSQL для дашборда «Пользователи» (USER-METRICS.md).
+# Namespace `pgcls_role*` / `pgcls_schema*` — в одном ряду с кластерными `pgcls_*`,
+# но в отдельном файле: его читает отдельный экспортёр с --auto-discover-databases.
+#
+# Правила:
+#   - роли — объекты всего экземпляра: запросы по ним помечены `master: true` и
+#     выполняются только в БД из DSN; запросы по схемам (`pg_namespace`) идут в каждую БД;
+#   - встроенные роли pg_* исключаются везде, кроме колонки `role` в членстве
+#     (членство в pg_read_all_data и т. п. — важная информация);
+#   - метки pg_cluster / node задаёт скрейпер (victoriametrics/scrape.yml), не SQL;
+#   - роли одинаковы на всех узлах: дашборд берёт строки лидера через
+#     `and on(pg_cluster, node) (pgcls_node_is_primary == 1)`;
+#   - хватает роли pg_monitor, pg_authid (хэши паролей) не читается.
+
+# --- Атрибуты ролей: фильтр «Пользователь», M46–M51 ----------------------
+pgcls_role:
+  master: true
+  query: |
+    SELECT
+      r.rolname,
+      r.rolsuper::text       AS rolsuper,
+      r.rolcanlogin::text    AS rolcanlogin,
+      r.rolinherit::text     AS rolinherit,
+      r.rolcreaterole::text  AS rolcreaterole,
+      r.rolcreatedb::text    AS rolcreatedb,
+      r.rolreplication::text AS rolreplication,
+      r.rolbypassrls::text   AS rolbypassrls,
+      1 AS info
+    FROM pg_roles r
+    WHERE r.rolname !~ '^pg_'
+  metrics:
+    - rolname: {usage: "LABEL", description: "Имя роли"}
+    - rolsuper: {usage: "LABEL", description: "true = superuser [M50]"}
+    - rolcanlogin: {usage: "LABEL", description: "false = NOLOGIN [M51]"}
+    - rolinherit: {usage: "LABEL", description: "Наследует права ролей, в которые входит"}
+    - rolcreaterole: {usage: "LABEL", description: "CREATEROLE"}
+    - rolcreatedb: {usage: "LABEL", description: "CREATEDB"}
+    - rolreplication: {usage: "LABEL", description: "REPLICATION"}
+    - rolbypassrls: {usage: "LABEL", description: "BYPASSRLS"}
+    - info: {usage: "GAUGE", description: "Всегда 1; атрибуты роли — в метках"}
+  cache_seconds: 300
+
+# --- Срок действия пароля: M46–M48, M50 ---------------------------------
+# Бессрочные роли (NULL / infinity) не отдаются: нет строки — нет срока.
+pgcls_role_valid_until:
+  master: true
+  query: |
+    SELECT
+      r.rolname,
+      extract(epoch FROM r.rolvaliduntil) AS seconds
+    FROM pg_roles r
+    WHERE r.rolname !~ '^pg_'
+      AND r.rolvaliduntil IS NOT NULL
+      AND r.rolvaliduntil <> 'infinity'
+  metrics:
+    - rolname: {usage: "LABEL", description: "Имя роли"}
+    - seconds: {usage: "GAUGE", description: "VALID UNTIL, epoch. Осталось = значение − time() [M46 M47 M48]"}
+  cache_seconds: 300
+
+# --- Членство в ролях, прямое и через другие роли: M49 -------------------
+# Значение — уровень вложенности (1 = прямое). Метка membership — путь членства.
+# inherit_option появился в PG 16; для старых версий берём rolinherit участника.
+# Одна роль может быть выдана несколькими грантёрами (PG 16+) — схлопываем GROUP BY.
+pgcls_role_membership:
+  master: true
+  query: |
+    WITH RECURSIVE g AS (
+      SELECT
+        am.member,
+        am.roleid,
+        COALESCE((to_jsonb(am) ->> 'inherit_option')::boolean, m.rolinherit) AS inherit,
+        am.admin_option AS admin
+      FROM pg_auth_members am
+      JOIN pg_roles m ON m.oid = am.member
+    ),
+    chain AS (
+      SELECT g.member, g.roleid, ''::text AS path, 1 AS depth, g.inherit, g.admin
+      FROM g
+      UNION ALL
+      SELECT c.member, g.roleid,
+             (c.path || CASE WHEN c.path = '' THEN '' ELSE ' → ' END
+                     || pg_get_userbyid(c.roleid)::text) COLLATE "default",
+             c.depth + 1, c.inherit AND g.inherit, g.admin
+      FROM chain c
+      JOIN g ON g.member = c.roleid
+      WHERE c.depth < 16
+    )
+    SELECT
+      u.rolname,
+      r.rolname AS role,
+      CASE WHEN c.path = '' THEN 'прямое' ELSE 'через ' || c.path END AS membership,
+      bool_or(c.inherit)::text AS inherit,
+      bool_or(c.admin)::text   AS admin,
+      r.rolsuper::text         AS role_super,
+      min(c.depth)             AS depth
+    FROM chain c
+    JOIN pg_roles u ON u.oid = c.member
+    JOIN pg_roles r ON r.oid = c.roleid
+    WHERE u.rolname !~ '^pg_'
+    GROUP BY u.rolname, r.rolname, c.path, r.rolsuper
+  metrics:
+    - rolname: {usage: "LABEL", description: "Участник (пользователь)"}
+    - role: {usage: "LABEL", description: "Роль, в которую он входит"}
+    - membership: {usage: "LABEL", description: "«прямое» или «через A → B»"}
+    - inherit: {usage: "LABEL", description: "true = права роли наследуются по всей цепочке"}
+    - admin: {usage: "LABEL", description: "ADMIN OPTION на последнем звене цепочки"}
+    - role_super: {usage: "LABEL", description: "true = роль сама является superuser"}
+    - depth: {usage: "GAUGE", description: "Уровень вложенности, 1 = прямое членство [M49]"}
+  cache_seconds: 300
+
+# --- Число участников роли: M51 -----------------------------------------
+pgcls_role_members:
+  master: true
+  query: |
+    SELECT
+      r.rolname,
+      count(DISTINCT am.member) AS count
+    FROM pg_roles r
+    LEFT JOIN pg_auth_members am ON am.roleid = r.oid
+    WHERE r.rolname !~ '^pg_'
+    GROUP BY r.rolname
+  metrics:
+    - rolname: {usage: "LABEL", description: "Имя роли"}
+    - count: {usage: "GAUGE", description: "Прямых участников роли; 0 у NOLOGIN = роль-сирота [M51]"}
+  cache_seconds: 300
+
+# --- Право CONNECT на БД: сужение M46–M48, M51 фильтром «БД» -------------
+# has_database_privilege учитывает PUBLIC, унаследованные права и superuser.
+pgcls_role_db:
+  master: true
+  query: |
+    SELECT
+      r.rolname,
+      d.datname AS db_name,
+      1 AS access
+    FROM pg_roles r
+    CROSS JOIN pg_database d
+    WHERE r.rolname !~ '^pg_'
+      AND NOT d.datistemplate
+      AND d.datallowconn
+      AND has_database_privilege(r.oid, d.oid, 'CONNECT')
+  metrics:
+    - rolname: {usage: "LABEL", description: "Имя роли"}
+    - db_name: {usage: "LABEL", description: "БД, к которой роль может подключиться"}
+    - access: {usage: "GAUGE", description: "Всегда 1; строки нет = CONNECT нет"}
+  cache_seconds: 300
+
+# --- Схемы каждой БД: фильтр «Схема» ------------------------------------
+pgcls_schema:
+  query: |
+    SELECT
+      current_database() AS db_name,
+      n.nspname AS schema,
+      1 AS info
+    FROM pg_namespace n
+    WHERE n.nspname !~ '^pg_'
+      AND n.nspname <> 'information_schema'
+  metrics:
+    - db_name: {usage: "LABEL", description: "БД"}
+    - schema: {usage: "LABEL", description: "Схема"}
+    - info: {usage: "GAUGE", description: "Всегда 1"}
+  cache_seconds: 300
+
+# --- Право USAGE на схему: сужение M46–M48, M51 фильтром «Схема» ---------
+# Строки только при наличии доступа; кардинальность — роли × БД × схемы.
+pgcls_role_schema:
+  query: |
+    SELECT
+      r.rolname,
+      current_database() AS db_name,
+      n.nspname AS schema,
+      1 AS access
+    FROM pg_roles r
+    CROSS JOIN pg_namespace n
+    WHERE r.rolname !~ '^pg_'
+      AND n.nspname !~ '^pg_'
+      AND n.nspname <> 'information_schema'
+      AND has_schema_privilege(r.oid, n.oid, 'USAGE')
+  metrics:
+    - rolname: {usage: "LABEL", description: "Имя роли"}
+    - db_name: {usage: "LABEL", description: "БД"}
+    - schema: {usage: "LABEL", description: "Схема, на которую у роли есть USAGE"}
+    - access: {usage: "GAUGE", description: "Всегда 1; строки нет = USAGE нет"}
+  cache_seconds: 300
